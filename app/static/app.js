@@ -3,6 +3,8 @@
 const state = {
   searches: [],
   items: [],
+  liveItems: null,
+  liveQuery: "",
   channels: [],
   alerts: [],
   auctions: [],
@@ -142,6 +144,8 @@ async function loadSearches() {
 }
 
 async function loadItems() {
+  state.liveItems = null;
+  state.liveQuery = "";
   const params = new URLSearchParams();
   const searchId = document.getElementById("filter-search-id").value;
   const q = document.getElementById("filter-q").value.trim();
@@ -157,6 +161,43 @@ async function loadItems() {
 
   state.items = await api(`/api/items?${params.toString()}`);
   renderItems();
+}
+
+async function runAdhocLiveSearch() {
+  const q = document.getElementById("filter-q").value.trim();
+  if (!q) {
+    toast("Type a keyword in the search box first (e.g. workstation)", "info");
+    return;
+  }
+  const btn = document.getElementById("btn-live-search-bar");
+  const maxBid = document.getElementById("filter-max-bid").value.trim();
+  const sortMap = {
+    closing_asc: "close",
+    bid_asc: "bidlow",
+    bid_desc: "bidhigh",
+    newest: "relevancy",
+  };
+  const sortField = sortMap[document.getElementById("filter-sort").value] || "close";
+
+  btn.disabled = true;
+  btn.textContent = "Searching...";
+  try {
+    const qs = new URLSearchParams({
+      keywords: q,
+      sort_field: sortField,
+      max_pages: "2",
+    });
+    if (maxBid) qs.set("max_bid", maxBid);
+    state.liveItems = await api(`/api/live-search?${qs.toString()}`);
+    state.liveQuery = q;
+    renderItems();
+    toast(`Found ${state.liveItems.length} live lot(s) for "${q}"`, "ok");
+  } catch (err) {
+    toast(`Live search failed: ${err.message}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Search Equip-Bid Live";
+  }
 }
 
 async function loadChannels() {
@@ -175,16 +216,52 @@ async function loadAlerts() {
 
 function renderItems() {
   const grid = document.getElementById("items-grid");
-  if (!state.items.length) {
+  const isLive = Array.isArray(state.liveItems);
+  const itemsToRender = isLive ? state.liveItems : state.items;
+  const currentQ = document.getElementById("filter-q").value.trim();
+
+  if (!itemsToRender.length) {
+    if (isLive) {
+      grid.innerHTML = `
+        <div class="empty-state">
+          <h3>No live lots found for "${esc(state.liveQuery)}"</h3>
+          <p>Try broader keywords, or save this as an alert rule so you're notified when one is listed.</p>
+          <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+            <button type="button" class="btn btn-primary btn-sm" data-action="save-live-search">+ Save Alert Rule for "${esc(state.liveQuery)}"</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-action="clear-live-search">Back to Saved Matches</button>
+          </div>
+        </div>`;
+      return;
+    }
     grid.innerHTML = `
       <div class="empty-state">
-        <h3>No matching items yet</h3>
-        <p>Create a Saved Search or click "Run All Searches Now" to scan equip-bid.com.</p>
+        <h3>${currentQ ? `No saved matches for "${esc(currentQ)}"` : "No matching items yet"}</h3>
+        <p>${currentQ
+          ? "Click below to search live Equip-Bid listings directly, or save this query as an automated alert rule."
+          : 'Create a Saved Search or click "Run All Searches Now" to scan equip-bid.com.'}</p>
+        ${currentQ ? `
+          <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+            <button type="button" class="btn btn-primary btn-sm" data-action="run-live-search">Search Equip-Bid Live for "${esc(currentQ)}"</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-action="save-live-search">+ Save as Alert Rule</button>
+          </div>` : ""}
       </div>`;
     return;
   }
 
-  grid.innerHTML = state.items
+  const headerBanner = isLive
+    ? `<div class="row-card" style="grid-column:1/-1;align-items:center;">
+         <div class="row-card-main">
+           <strong>Live Equip-Bid Search: "${esc(state.liveQuery)}"</strong>
+           <span class="muted"> &mdash; Showing ${itemsToRender.length} live lot(s) directly from equip-bid.com</span>
+         </div>
+         <div class="row-card-actions">
+           <button type="button" class="btn btn-primary btn-sm" data-action="save-live-search">+ Save as Alert Rule</button>
+           <button type="button" class="btn btn-secondary btn-sm" data-action="clear-live-search">Back to Saved Matches</button>
+         </div>
+       </div>`
+    : "";
+
+  grid.innerHTML = headerBanner + itemsToRender
     .map((item) => {
       const hrs = hoursUntil(item.closing_at);
       const isClosingSoon = hrs !== null && hrs > 0 && hrs <= 24;
@@ -193,18 +270,34 @@ function renderItems() {
         ? `<img class="lot-thumb" src="${esc(item.image_url)}" alt="${esc(item.title)}" loading="lazy" />`
         : `<div class="lot-thumb-placeholder">No Image</div>`;
 
+      const badgesHtml = isLive
+        ? `<span class="pill unread">LIVE EQUIP-BID RESULT</span>
+           ${isClosingSoon ? '<span class="pill warn">CLOSING SOON</span>' : ""}`
+        : `${!item.is_read ? '<span class="pill unread">NEW</span>' : ""}
+           ${item.is_watched ? '<span class="pill ok">WATCHED</span>' : ""}
+           ${isClosingSoon ? '<span class="pill warn">CLOSING SOON</span>' : ""}
+           ${isEnded ? '<span class="pill danger">ENDED</span>' : ""}
+           ${item.search_name ? `<span class="pill">${esc(item.search_name)}</span>` : ""}`;
+
+      const actionsHtml = isLive
+        ? `<a class="btn btn-primary btn-sm" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">View Lot</a>
+           <button type="button" class="btn btn-secondary btn-sm" data-action="save-live-search">+ Save Search Rule</button>`
+        : `<a class="btn btn-primary btn-sm" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">View Lot</a>
+           <button class="btn btn-secondary btn-sm" data-action="watch" data-id="${item.id}" data-val="${!item.is_watched}">
+             ${item.is_watched ? "Unwatch" : "Watch"}
+           </button>
+           <button class="btn btn-secondary btn-sm" data-action="read" data-id="${item.id}" data-val="${!item.is_read}">
+             ${item.is_read ? "Mark Unread" : "Mark Read"}
+           </button>
+           <div class="spacer"></div>
+           <button class="btn btn-ghost btn-sm" data-action="dismiss" data-id="${item.id}">Dismiss</button>`;
+
       return `
-        <article class="lot-card ${item.is_read ? "" : "unread"}">
+        <article class="lot-card ${!isLive && !item.is_read ? "unread" : ""}">
           <div class="lot-card-top">
             ${thumbHtml}
             <div class="lot-info">
-              <div class="lot-badges">
-                ${!item.is_read ? '<span class="pill unread">NEW</span>' : ""}
-                ${item.is_watched ? '<span class="pill ok">WATCHED</span>' : ""}
-                ${isClosingSoon ? '<span class="pill warn">CLOSING SOON</span>' : ""}
-                ${isEnded ? '<span class="pill danger">ENDED</span>' : ""}
-                ${item.search_name ? `<span class="pill">${esc(item.search_name)}</span>` : ""}
-              </div>
+              <div class="lot-badges">${badgesHtml}</div>
               <h3 class="lot-title">
                 <a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>
               </h3>
@@ -222,17 +315,7 @@ function renderItems() {
             </div>
             <span class="bid-sub">${item.shipping_info ? esc(item.shipping_info) : ""}</span>
           </div>
-          <div class="lot-actions">
-            <a class="btn btn-primary btn-sm" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">View Lot</a>
-            <button class="btn btn-secondary btn-sm" data-action="watch" data-id="${item.id}" data-val="${!item.is_watched}">
-              ${item.is_watched ? "Unwatch" : "Watch"}
-            </button>
-            <button class="btn btn-secondary btn-sm" data-action="read" data-id="${item.id}" data-val="${!item.is_read}">
-              ${item.is_read ? "Mark Unread" : "Mark Read"}
-            </button>
-            <div class="spacer"></div>
-            <button class="btn btn-ghost btn-sm" data-action="dismiss" data-id="${item.id}">Dismiss</button>
-          </div>
+          <div class="lot-actions">${actionsHtml}</div>
         </article>
       `;
     })
@@ -552,6 +635,19 @@ function initEvents() {
     });
   });
 
+  document.getElementById("filter-q").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      clearTimeout(debounceTimer);
+      runAdhocLiveSearch();
+    }
+  });
+  document.getElementById("btn-live-search-bar").addEventListener("click", () => runAdhocLiveSearch());
+  document.getElementById("btn-save-from-bar").addEventListener("click", () => {
+    const q = document.getElementById("filter-q").value.trim();
+    openSearchModal(null, { keywords: q, name: q ? `${q} Monitor` : "" });
+  });
+
   // Run all searches / Mark all read
   document.getElementById("btn-mark-all-read").addEventListener("click", async () => {
     const searchId = document.getElementById("filter-search-id").value;
@@ -586,7 +682,17 @@ function initEvents() {
     const action = btn.dataset.action;
     const val = btn.dataset.val === "true";
     try {
-      if (action === "watch") {
+      if (action === "run-live-search") {
+        await runAdhocLiveSearch();
+        return;
+      } else if (action === "save-live-search") {
+        const q = (state.liveQuery || document.getElementById("filter-q").value).trim();
+        openSearchModal(null, { keywords: q, name: q ? `${q} Monitor` : "" });
+        return;
+      } else if (action === "clear-live-search") {
+        await loadItems();
+        return;
+      } else if (action === "watch") {
         await api(`/api/items/${id}/watch`, { method: "POST", body: JSON.stringify({ value: val }) });
       } else if (action === "read") {
         await api(`/api/items/${id}/read`, { method: "POST", body: JSON.stringify({ value: val }) });

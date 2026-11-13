@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app import database, notifier, scheduler, scraper
@@ -29,9 +29,39 @@ logging.basicConfig(
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+    '<rect width="64" height="64" rx="14" fill="#2563eb"/>'
+    '<text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" '
+    'fill="#ffffff" font-family="Arial,sans-serif" font-weight="bold" font-size="28">EB</text>'
+    "</svg>"
+)
+
+
+class _NoiseProbeFilter(logging.Filter):
+    """Suppress local Razer Wyvrn/Synapse WebSocket probes and paired 403 rejection logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "/wyvrn/Synapse" in msg or "connection rejected (403 Forbidden)" in msg:
+            return False
+        return True
+
+
+def _install_log_filters() -> None:
+    probe_filter = _NoiseProbeFilter()
+    for logger_name in ("uvicorn.access", "uvicorn.error"):
+        target_logger = logging.getLogger(logger_name)
+        if not any(isinstance(f, _NoiseProbeFilter) for f in target_logger.filters):
+            target_logger.addFilter(probe_filter)
+
+
+_install_log_filters()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _install_log_filters()
     database.init_db()
     stop_event = asyncio.Event()
     task = asyncio.create_task(scheduler.scheduler_loop(stop_event))
@@ -59,6 +89,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/", include_in_schema=False)
 async def serve_index() -> FileResponse:
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def serve_favicon() -> Response:
+    return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
 
 
 @app.get("/api/health")
