@@ -1,0 +1,13 @@
+services:
+  equipbid-monitor:
+    build: .
+    image: ghcr.io/dhovin/auction-search:latest
+    container_name: equipbid-auction-search
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_PATH=/app/data/auction_search.db
+      - SCHEDULER_TICK_SECONDS=60
+    restart: unless-stopped
