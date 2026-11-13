@@ -29,6 +29,7 @@
       </nav>
 
       <div class="topbar-actions">
+        <button class="btn btn-secondary btn-sm" id="btn-toggle-sidebar" type="button" title="Show/Hide Left Sidebar">&#9776; Sidebar</button>
         <button class="btn btn-secondary" id="btn-open-alerts-settings">Configure Alerts</button>
         <button class="btn btn-primary" id="btn-new-search-top">+ New Search</button>
       </div>
@@ -39,125 +40,141 @@
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-    <!-- SITE-WIDE DEFAULTS BAR -->
-    <form id="global-defaults-form" class="global-defaults-bar">
-      <div class="global-defaults-title">
-        <strong>Site-Wide Defaults</strong>
-        <span class="muted">Applied automatically to searches &amp; alerts unless overridden</span>
-      </div>
-      <div class="global-defaults-fields">
-        <label class="inline-field">
-          <span>ZIP Code</span>
-          <input type="text" id="global-zip" maxlength="10" placeholder="e.g. 64108" />
-        </label>
-        <label class="inline-field">
-          <span>Distance</span>
-          <select id="global-distance">
-            <option value="-1">Any Distance</option>
-            <option value="10">10 miles</option>
-            <option value="25">25 miles</option>
-            <option value="50">50 miles</option>
-            <option value="75">75 miles</option>
-            <option value="100">100 miles</option>
-            <option value="150">150 miles</option>
-            <option value="250">250 miles</option>
-          </select>
-        </label>
-        <label class="inline-field inline-field-wide">
-          <span>Global Exclude Words</span>
-          <input type="text" id="global-exclude" maxlength="500" placeholder="e.g. broken, parts only, empty box" />
-        </label>
-        <label class="inline-field inline-field-sm">
-          <span>Interval (m)</span>
-          <input type="number" id="global-interval" min="1" max="1440" value="30" />
-        </label>
-        <label class="inline-field inline-field-sm">
-          <span>Close Alert (h)</span>
-          <input type="number" id="global-closing-hours" min="0" max="168" step="0.5" value="4" />
-        </label>
-        <label class="checkbox-row inline-checkbox">
-          <input type="checkbox" id="global-include-shippable" checked />
-          <span>+ Out-of-Range w/ Shipping</span>
-        </label>
-        <button type="submit" id="btn-save-global-settings" class="btn btn-primary btn-sm">Save Defaults</button>
-      </div>
-    </form>
-
-    <!-- TAB 1: MATCHED ITEMS / ALERT FEED -->
-    <section id="tab-items" class="tab-panel active">
-      <div class="stats-grid">
-        <div class="stat-card">
-          <span class="stat-label">Unread Matches</span>
-          <strong class="stat-value accent" id="stat-unread">0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Closing Within 24h</span>
-          <strong class="stat-value warn" id="stat-closing">0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Watched Lots</span>
-          <strong class="stat-value" id="stat-watched">0</strong>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Active Searches</span>
-          <strong class="stat-value ok" id="stat-searches">0</strong>
-        </div>
-      </div>
-
-      <form id="add-item-url-form" class="manual-url-bar">
-        <div class="manual-url-label">
-          <strong>Track Specific Item URL</strong>
-          <span class="muted">Paste one or more equip-bid.com/auction/.../item/... links to list &amp; track directly</span>
-        </div>
-        <div class="manual-url-controls">
-          <input type="text" id="manual-item-url" placeholder="https://www.equip-bid.com/auction/48423/item/12963" required />
-          <label class="checkbox-row">
-            <input type="checkbox" id="manual-item-watch" checked />
-            <span>Mark Watched</span>
-          </label>
-          <button type="submit" id="btn-add-item-url" class="btn btn-primary btn-sm">+ Add Item Link</button>
-        </div>
-      </form>
-
-      <div class="toolbar">
-        <div class="toolbar-filters">
-          <select id="filter-search-id" title="Filter by Saved Search">
-            <option value="">All Saved Searches</option>
-          </select>
-          <input type="text" id="filter-q" placeholder="Search or filter lots (e.g. workstation, HP desk, welder)..." />
-          <button type="button" class="btn btn-primary btn-sm" id="btn-live-search-bar">Search Equip-Bid Live</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="btn-save-from-bar">+ Save as Alert Rule</button>
-          <input type="number" id="filter-max-bid" placeholder="Max bid ($)" min="0" step="1" />
-          <select id="filter-sort">
-            <option value="closing_asc">Closing Soonest</option>
-            <option value="newest">Newest Discovered</option>
-            <option value="bid_asc">Lowest Bid</option>
-            <option value="bid_desc">Highest Bid</option>
-          </select>
-          <label class="chip-toggle">
-            <input type="checkbox" id="filter-unread" />
-            <span>Unread Only</span>
-          </label>
-          <label class="chip-toggle">
-            <input type="checkbox" id="filter-watched" />
-            <span>Watched</span>
-          </label>
-          <label class="chip-toggle">
-            <input type="checkbox" id="filter-closing" />
-            <span>Closing &lt;24h</span>
-          </label>
+    <div id="app-shell" class="app-shell">
+      <!-- LEFT SIDEBAR: STATS, FILTERS, MANUAL URL TRACKER & DEFAULTS -->
+      <aside id="app-sidebar" class="app-sidebar">
+        <div class="sidebar-card">
+          <div class="stats-grid sidebar-stats-grid">
+            <div class="stat-card">
+              <span class="stat-label">Unread Matches</span>
+              <strong class="stat-value accent" id="stat-unread">0</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Closing &lt;24h</span>
+              <strong class="stat-value warn" id="stat-closing">0</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Watched Lots</span>
+              <strong class="stat-value" id="stat-watched">0</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Active Searches</span>
+              <strong class="stat-value ok" id="stat-searches">0</strong>
+            </div>
+          </div>
         </div>
 
-        <div class="toolbar-actions">
-          <button class="btn btn-secondary" id="btn-mark-all-read">Mark All Read</button>
-          <button class="btn btn-primary" id="btn-run-all">Run All Searches Now</button>
+        <div class="sidebar-card">
+          <div class="sidebar-card-title">Search, Filter &amp; Scan</div>
+          <div class="sidebar-stack">
+            <select id="filter-search-id" title="Filter by Saved Search">
+              <option value="">All Saved Searches</option>
+            </select>
+            <input type="text" id="filter-q" placeholder="Filter lots or search live..." />
+            <div class="sidebar-btn-row">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-live-search-bar">Search Live</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-save-from-bar">+ Save Rule</button>
+            </div>
+            <div class="sidebar-two-col">
+              <input type="number" id="filter-max-bid" placeholder="Max bid ($)" min="0" step="1" />
+              <select id="filter-sort" title="Sort Order">
+                <option value="closing_asc">Closing Soonest</option>
+                <option value="newest">Newest Found</option>
+                <option value="bid_asc">Lowest Bid</option>
+                <option value="bid_desc">Highest Bid</option>
+              </select>
+            </div>
+            <div class="sidebar-chips">
+              <label class="chip-toggle">
+                <input type="checkbox" id="filter-unread" />
+                <span>Unread Only</span>
+              </label>
+              <label class="chip-toggle">
+                <input type="checkbox" id="filter-watched" />
+                <span>Watched</span>
+              </label>
+              <label class="chip-toggle">
+                <input type="checkbox" id="filter-closing" />
+                <span>Closing &lt;24h</span>
+              </label>
+            </div>
+            <div class="sidebar-btn-row">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-run-all">Run All Searches Now</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-mark-all-read">Mark All Read</button>
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div id="items-grid" class="items-grid"></div>
-    </section>
+        <form id="add-item-url-form" class="sidebar-card">
+          <div class="sidebar-card-title">Track Specific Item URL</div>
+          <div class="sidebar-stack">
+            <input type="text" id="manual-item-url" placeholder="https://www.equip-bid.com/auction/48423/item/12963" required />
+            <div class="sidebar-between-row">
+              <label class="checkbox-row">
+                <input type="checkbox" id="manual-item-watch" checked />
+                <span>Mark Watched</span>
+              </label>
+              <button type="submit" id="btn-add-item-url" class="btn btn-primary btn-sm">+ Add Item Link</button>
+            </div>
+          </div>
+        </form>
 
-    <!-- TAB 2: SAVED SEARCHES -->
+        <details id="sidebar-defaults-details" class="sidebar-card sidebar-details">
+          <summary>
+            <span>Site-Wide Defaults</span>
+            <span id="sidebar-defaults-badge" class="pill">Default</span>
+          </summary>
+          <form id="global-defaults-form" class="sidebar-stack" style="margin-top:10px;">
+            <div class="sidebar-two-col">
+              <label class="sidebar-field">
+                <span>ZIP Code</span>
+                <input type="text" id="global-zip" maxlength="10" placeholder="e.g. 64108" />
+              </label>
+              <label class="sidebar-field">
+                <span>Distance</span>
+                <select id="global-distance">
+                  <option value="-1">Any Distance</option>
+                  <option value="10">10 miles</option>
+                  <option value="25">25 miles</option>
+                  <option value="50">50 miles</option>
+                  <option value="75">75 miles</option>
+                  <option value="100">100 miles</option>
+                  <option value="150">150 miles</option>
+                  <option value="250">250 miles</option>
+                </select>
+              </label>
+            </div>
+            <label class="sidebar-field">
+              <span>Global Exclude Words</span>
+              <input type="text" id="global-exclude" maxlength="500" placeholder="e.g. broken, parts only" />
+            </label>
+            <div class="sidebar-two-col">
+              <label class="sidebar-field">
+                <span>Interval (m)</span>
+                <input type="number" id="global-interval" min="1" max="1440" value="30" />
+              </label>
+              <label class="sidebar-field">
+                <span>Close Alert (h)</span>
+                <input type="number" id="global-closing-hours" min="0" max="168" step="0.5" value="4" />
+              </label>
+            </div>
+            <label class="checkbox-row">
+              <input type="checkbox" id="global-include-shippable" checked />
+              <span>+ Out-of-Range w/ Shipping</span>
+            </label>
+            <button type="submit" id="btn-save-global-settings" class="btn btn-primary btn-sm">Save Defaults</button>
+          </form>
+        </details>
+      </aside>
+
+      <!-- MAIN CONTENT AREA -->
+      <div class="app-main">
+        <!-- TAB 1: MATCHED ITEMS / ALERT FEED -->
+        <section id="tab-items" class="tab-panel active">
+          <div id="items-grid" class="items-grid"></div>
+        </section>
+
+        <!-- TAB 2: SAVED SEARCHES -->
     <section id="tab-searches" class="tab-panel">
       <div class="panel-header">
         <div>
@@ -288,6 +305,8 @@
         </table>
       </div>
     </section>
+      </div><!-- .app-main -->
+    </div><!-- .app-shell -->
   </main>
 
   <!-- MODAL: CREATE / EDIT SAVED SEARCH -->
@@ -407,6 +426,25 @@
           <button type="submit" class="btn btn-primary">Save Search</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- MODAL: CONFIRMATION -->
+  <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <div class="modal-backdrop" id="confirm-modal-backdrop"></div>
+    <div class="modal-card modal-sm">
+      <div class="modal-header">
+        <h3 id="confirm-modal-title">Confirm Action</h3>
+        <button type="button" class="icon-btn" id="confirm-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="confirm-modal-message" class="confirm-message"></p>
+        <div class="modal-footer">
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-ghost" id="confirm-modal-cancel">Cancel</button>
+          <button type="button" class="btn btn-danger" id="confirm-modal-ok">Confirm</button>
+        </div>
+      </div>
     </div>
   </div>
 

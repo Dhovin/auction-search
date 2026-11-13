@@ -234,6 +234,49 @@ function closeModal(id) {
   document.getElementById(id).classList.add("hidden");
 }
 
+function confirmAction({ title = "Confirm Action", message = "Are you sure?", confirmText = "Confirm" } = {}) {
+  const modal = document.getElementById("confirm-modal");
+  if (!modal) {
+    return Promise.resolve(window.confirm(message));
+  }
+
+  document.getElementById("confirm-modal-title").textContent = title;
+  document.getElementById("confirm-modal-message").textContent = message;
+  const okBtn = document.getElementById("confirm-modal-ok");
+  const cancelBtn = document.getElementById("confirm-modal-cancel");
+  const closeBtn = document.getElementById("confirm-modal-close");
+  const backdrop = document.getElementById("confirm-modal-backdrop");
+  okBtn.textContent = confirmText;
+
+  return new Promise((resolve) => {
+    const finish = (result) => {
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      closeBtn.removeEventListener("click", onCancel);
+      backdrop.removeEventListener("click", onCancel);
+      document.removeEventListener("keydown", onKeyDown);
+      closeModal("confirm-modal");
+      resolve(result);
+    };
+    const onOk = () => finish(true);
+    const onCancel = () => finish(false);
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        finish(false);
+      }
+    };
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    closeBtn.addEventListener("click", onCancel);
+    backdrop.addEventListener("click", onCancel);
+    document.addEventListener("keydown", onKeyDown);
+    openModal("confirm-modal");
+    cancelBtn.focus();
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Stats & Data Loading
 // ---------------------------------------------------------------------------
@@ -382,6 +425,14 @@ function renderSiteSettings() {
   if (intEl) intEl.value = s.default_check_interval_minutes ?? 30;
   if (closeEl) closeEl.value = s.default_closing_soon_hours ?? 4;
   if (shipEl) shipEl.checked = s.include_shippable_out_of_range !== false;
+  const badgeEl = document.getElementById("sidebar-defaults-badge");
+  if (badgeEl) {
+    const zip = (s.default_zip_code || "").trim();
+    const dist = Number(s.default_distance_radius ?? -1);
+    if (zip && dist > 0) badgeEl.textContent = `${zip} · ${dist}mi`;
+    else if (zip) badgeEl.textContent = `${zip} · Any`;
+    else badgeEl.textContent = dist > 0 ? `${dist}mi` : "Default";
+  }
 
   const aucZipEl = document.getElementById("auctions-zip");
   const aucDistEl = document.getElementById("auctions-distance");
@@ -515,7 +566,7 @@ function renderItems() {
              ${item.is_read ? "Mark Unread" : "Mark Read"}
            </button>
            <div class="spacer"></div>
-           <button class="btn btn-ghost btn-sm" data-action="dismiss" data-id="${item.id}">Dismiss</button>`;
+           <button class="btn btn-ghost btn-sm" data-action="dismiss" data-id="${item.id}" data-watched="${item.is_watched ? "true" : "false"}">Dismiss</button>`;
 
       return `
         <article class="lot-card ${!isLive && !item.is_read ? "unread" : ""}">
@@ -987,6 +1038,26 @@ function initEvents() {
   });
 
   document.getElementById("btn-new-search-top").addEventListener("click", () => openSearchModal());
+  const appShell = document.getElementById("app-shell");
+  const toggleSidebarBtn = document.getElementById("btn-toggle-sidebar");
+  const applySidebarCollapsed = (collapsed) => {
+    if (!appShell) return;
+    appShell.classList.toggle("sidebar-collapsed", collapsed);
+    if (toggleSidebarBtn) {
+      toggleSidebarBtn.setAttribute("aria-expanded", String(!collapsed));
+      toggleSidebarBtn.textContent = collapsed ? "Show Controls" : "Hide Controls";
+    }
+  };
+  if (appShell) {
+    applySidebarCollapsed(localStorage.getItem("equipbid_sidebar_collapsed") === "1");
+  }
+  if (toggleSidebarBtn) {
+    toggleSidebarBtn.addEventListener("click", () => {
+      const nextCollapsed = !appShell.classList.contains("sidebar-collapsed");
+      applySidebarCollapsed(nextCollapsed);
+      localStorage.setItem("equipbid_sidebar_collapsed", nextCollapsed ? "1" : "0");
+    });
+  }
   document.getElementById("btn-open-alerts-settings").addEventListener("click", () => switchTab("channels"));
   document.getElementById("btn-alerts-tab-configure").addEventListener("click", () => switchTab("channels"));
   document.getElementById("btn-modal-go-channels").addEventListener("click", () => {
@@ -1025,6 +1096,7 @@ function initEvents() {
     const watch = document.getElementById("manual-item-watch").checked;
     try {
       await addManualItemByUrl(rawUrl, watch);
+      switchTab("items");
     } catch (err) {
       toast(`Failed to add item link: ${err.message}`, "error");
     }
@@ -1064,13 +1136,19 @@ function initEvents() {
 
   // Item filters
   ["filter-search-id", "filter-sort", "filter-unread", "filter-watched", "filter-closing"].forEach((id) => {
-    document.getElementById(id).addEventListener("change", () => loadItems());
+    document.getElementById(id).addEventListener("change", () => {
+      switchTab("items");
+      loadItems();
+    });
   });
   let debounceTimer;
   ["filter-q", "filter-max-bid"].forEach((id) => {
     document.getElementById(id).addEventListener("input", () => {
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => loadItems(), 250);
+      debounceTimer = setTimeout(() => {
+        switchTab("items");
+        loadItems();
+      }, 250);
     });
   });
 
@@ -1078,10 +1156,14 @@ function initEvents() {
     if (e.key === "Enter") {
       e.preventDefault();
       clearTimeout(debounceTimer);
+      switchTab("items");
       runAdhocLiveSearch();
     }
   });
-  document.getElementById("btn-live-search-bar").addEventListener("click", () => runAdhocLiveSearch());
+  document.getElementById("btn-live-search-bar").addEventListener("click", () => {
+    switchTab("items");
+    runAdhocLiveSearch();
+  });
   document.getElementById("btn-save-from-bar").addEventListener("click", () => {
     const q = document.getElementById("filter-q").value.trim();
     openSearchModal(null, { keywords: q, name: q ? `${q} Monitor` : "" });
@@ -1090,7 +1172,8 @@ function initEvents() {
   // Run all searches / Mark all read
   document.getElementById("btn-mark-all-read").addEventListener("click", async () => {
     const searchId = document.getElementById("filter-search-id").value;
-    const url = searchId ? `/api/items/mark-all-read?search_id=${searchId}` : "/api/items/mark-all-read";
+    const validSearchId = searchId && searchId !== "manual" ? searchId : "";
+    const url = validSearchId ? `/api/items/mark-all-read?search_id=${validSearchId}` : "/api/items/mark-all-read";
     await api(url, { method: "POST" });
     toast("Marked items as read", "ok");
     await Promise.all([loadItems(), refreshStats()]);
@@ -1136,6 +1219,17 @@ function initEvents() {
       } else if (action === "read") {
         await api(`/api/items/${id}/read`, { method: "POST", body: JSON.stringify({ value: val }) });
       } else if (action === "dismiss") {
+        const item = state.items.find((x) => x.id === Number(id));
+        const isWatched = item ? Boolean(item.is_watched) : btn.dataset.watched === "true";
+        if (isWatched) {
+          const label = item?.title ? `"${item.title}"` : "this watched lot";
+          const confirmed = await confirmAction({
+            title: "Dismiss Watched Item?",
+            message: `${label} is currently watched. Dismissing it will remove it from your active and watched lists. Are you sure you want to dismiss it?`,
+            confirmText: "Dismiss Item",
+          });
+          if (!confirmed) return;
+        }
         await api(`/api/items/${id}/dismiss`, { method: "POST", body: JSON.stringify({ value: true }) });
         toast("Item dismissed", "info");
       }
