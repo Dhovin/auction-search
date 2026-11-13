@@ -257,7 +257,7 @@ async function loadSearches() {
   state.searches = await api("/api/searches");
   const select = document.getElementById("filter-search-id");
   const prev = select.value;
-  select.innerHTML = '<option value="">All Saved Searches</option>';
+  select.innerHTML = '<option value="">All Saved Searches</option><option value="manual">Manually Added Links</option>';
   state.searches.forEach((s) => {
     const opt = document.createElement("option");
     opt.value = String(s.id);
@@ -276,7 +276,11 @@ async function loadItems() {
   const q = document.getElementById("filter-q").value.trim();
   const maxBid = document.getElementById("filter-max-bid").value.trim();
   const sort = document.getElementById("filter-sort").value;
-  if (searchId) params.set("search_id", searchId);
+  if (searchId === "manual") {
+    params.set("manual_only", "true");
+  } else if (searchId) {
+    params.set("search_id", searchId);
+  }
   if (q) params.set("q", q);
   if (maxBid) params.set("max_bid", maxBid);
   if (sort) params.set("sort", sort);
@@ -288,10 +292,44 @@ async function loadItems() {
   renderItems();
 }
 
+async function addManualItemByUrl(rawUrl, watch = true) {
+  const url = (rawUrl || "").trim();
+  if (!url) {
+    toast("Paste an Equip-Bid item URL first", "error");
+    return;
+  }
+  const btn = document.getElementById("btn-add-item-url");
+  const prevText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Fetching Lot...";
+  try {
+    const res = await api("/api/items/from-url", {
+      method: "POST",
+      body: JSON.stringify({ url, watch }),
+    });
+    const urlInput = document.getElementById("manual-item-url");
+    if (urlInput) urlInput.value = "";
+    await Promise.all([loadItems(), refreshStats()]);
+    toast(`Listed ${res.count} item(s) from Equip-Bid link`, "ok");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevText;
+  }
+}
+
 async function runAdhocLiveSearch() {
   const q = document.getElementById("filter-q").value.trim();
   if (!q) {
     toast("Type a keyword in the search box first (e.g. workstation)", "info");
+    return;
+  }
+  if (/\/auction\/\d+\/item\/\d+/i.test(q)) {
+    try {
+      await addManualItemByUrl(q, true);
+      document.getElementById("filter-q").value = "";
+    } catch (err) {
+      toast(`Failed to add item link: ${err.message}`, "error");
+    }
     return;
   }
   const btn = document.getElementById("btn-live-search-bar");
@@ -464,7 +502,7 @@ function renderItems() {
            ${hasShipping ? '<span class="pill ok">SHIPPING AVAILABLE</span>' : ""}
            ${isClosingSoon ? '<span class="pill warn">CLOSING SOON</span>' : ""}
            ${isEnded ? '<span class="pill danger">ENDED</span>' : ""}
-           ${item.search_name ? `<span class="pill">${esc(item.search_name)}</span>` : ""}`;
+           ${item.search_name ? `<span class="pill">${esc(item.search_name)}</span>` : (!item.search_id ? '<span class="pill">MANUAL LINK</span>' : "")}`;
 
       const actionsHtml = isLive
         ? `<a class="btn btn-primary btn-sm" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">View Lot</a>
@@ -979,6 +1017,17 @@ function initEvents() {
   });
   document.getElementById("auctions-include-shippable").addEventListener("change", (e) => {
     e.target.dataset.touched = "1";
+  });
+
+  document.getElementById("add-item-url-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const rawUrl = document.getElementById("manual-item-url").value.trim();
+    const watch = document.getElementById("manual-item-watch").checked;
+    try {
+      await addManualItemByUrl(rawUrl, watch);
+    } catch (err) {
+      toast(`Failed to add item link: ${err.message}`, "error");
+    }
   });
 
   // Inline platform selector pills & channel form

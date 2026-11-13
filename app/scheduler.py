@@ -98,37 +98,15 @@ async def execute_saved_search(
             new_alerts += 1
 
         # 2) Closing Soon Alert
-        closing_hours = search.get("closing_soon_hours")
-        closing_dt = _parse_iso_utc(stored_item.get("closing_at"))
-        if (
-            closing_hours is not None
-            and float(closing_hours) > 0
-            and closing_dt is not None
-            and not stored_item.get("closing_soon_alert_sent")
+        if await _maybe_dispatch_closing_alert(
+            stored_item,
+            closing_hours=search.get("closing_soon_hours"),
+            max_bid=search.get("max_bid"),
+            now_utc=now_utc,
+            search=search,
+            db_path=db_path,
         ):
-            hours_left = (closing_dt - now_utc).total_seconds() / 3600.0
-            max_bid = search.get("max_bid")
-            within_budget = max_bid is None or float(stored_item.get("current_bid") or 0.0) <= float(max_bid)
-            if 0 < hours_left <= float(closing_hours) and within_budget:
-                bid = float(stored_item.get("current_bid") or 0.0)
-                time_left_str = _format_duration_short(hours_left)
-                alert_title = (
-                    f"[Closing Soon ({time_left_str})] {stored_item['title']} — ${bid:,.2f}"
-                )
-                await notifier.dispatch_alerts(
-                    alert_type="closing_soon",
-                    title=alert_title,
-                    item=stored_item,
-                    search=search,
-                    db_path=db_path,
-                )
-                database.mark_item_alert_flags(
-                    stored_item["id"],
-                    closing_soon_alert_sent=True,
-                    is_read=False,
-                    db_path=db_path,
-                )
-                closing_alerts += 1
+            closing_alerts += 1
 
     database.update_search_run_stats(search["id"], match_count=len(matched), db_path=db_path)
 
@@ -150,6 +128,93 @@ def _is_search_due(search: dict[str, Any], now_utc: datetime) -> bool:
     return (now_utc - last_run).total_seconds() >= interval_seconds
 
 
+async def _maybe_dispatch_closing_alert(
+    stored_item: dict[str, Any],
+    *,
+    closing_hours: Optional[float],
+    max_bid: Optional[float],
+    now_utc: datetime,
+    search: Optional[dict[str, Any]] = None,
+    db_path: Optional[str] = None,
+) -> bool:
+    """Send a closing-soon alert if within window and not yet notified."""
+    closing_dt = _parse_iso_utc(stored_item.get("closing_at"))
+    if (
+        closing_hours is None
+        or float(closing_hours) <= 0
+        or closing_dt is None
+        or stored_item.get("closing_soon_alert_sent")
+    ):
+        return False
+
+    hours_left = (closing_dt - now_utc).total_seconds() / 3600.0
+    within_budget = max_bid is None or float(stored_item.get("current_bid") or 0.0) <= float(max_bid)
+    if 0 < hours_left <= float(closing_hours) and within_budget:
+        bid = float(stored_item.get("current_bid") or 0.0)
+        time_left_str = _format_duration_short(hours_left)
+        alert_title = f"[Closing Soon ({time_left_str})] {stored_item['title']} — ${bid:,.2f}"
+        await notifier.dispatch_alerts(
+            alert_type="closing_soon",
+            title=alert_title,
+            item=stored_item,
+            search=search,
+            db_path=db_path,
+        )
+        database.mark_item_alert_flags(
+            stored_item["id"],
+            closing_soon_alert_sent=True,
+            is_read=False,
+            db_path=db_path,
+        )
+        return True
+    return False
+
+
+async def refresh_manual_items(
+    db_path: Optional[str] = None, *, force: bool = True
+) -> dict[str, int]:
+    """Re-scrape manually added items to keep bids, timers, and closing-soon alerts updated."""
+    items = database.list_manual_active_items(db_path=db_path)
+    if not items:
+        return {"refreshed": 0, "closing_alerts": 0}
+
+    settings = database.get_site_settings(db_path=db_path)
+    interval_sec = max(1, int(settings.get("default_check_interval_minutes") or 30)) * 60
+    closing_hours = settings.get("default_closing_soon_hours")
+    now_utc = datetime.now(timezone.utc)
+    refreshed = 0
+    closing_alerts = 0
+
+    for item in items:
+        if not force:
+            last_seen = _parse_iso_utc(item.get("last_seen_at"))
+            if last_seen is not None and (now_utc - last_seen).total_seconds() < interval_sec:
+                continue
+        closing_dt = _parse_iso_utc(item.get("closing_at"))
+        if closing_dt is not None and closing_dt <= now_utc:
+            continue
+        try:
+            lot = await scraper.scrape_single_lot(item["auction_id"], item["lot_number"])
+            stored_item, _ = database.upsert_matched_item(
+                lot, search_id=None, db_path=db_path
+            )
+            refreshed += 1
+            if await _maybe_dispatch_closing_alert(
+                stored_item,
+                closing_hours=closing_hours,
+                max_bid=None,
+                now_utc=now_utc,
+                search=None,
+                db_path=db_path,
+            ):
+                closing_alerts += 1
+        except Exception as exc:
+            logger.warning("Failed refreshing manual item %s: %s", item.get("lot_key"), exc)
+        await asyncio.sleep(0.2)
+
+    return {"refreshed": refreshed, "closing_alerts": closing_alerts}
+
+
 async def run_due_searches(db_path: Optional[str] = None) -> list[dict[str, Any]]:
     """Run all enabled searches whose interval has elapsed."""
     now_utc = datetime.now(timezone.utc)
@@ -164,6 +229,7 @@ async def run_due_searches(db_path: Optional[str] = None) -> list[dict[str, Any]
         except Exception as exc:
             logger.exception("Failed running search %s (%s): %s", search["id"], search["name"], exc)
         await asyncio.sleep(1.0)
+    await refresh_manual_items(db_path=db_path, force=False)
     return results
 
 
@@ -185,6 +251,7 @@ async def run_all_enabled_searches(db_path: Optional[str] = None) -> list[dict[s
                 }
             )
         await asyncio.sleep(0.5)
+    await refresh_manual_items(db_path=db_path, force=True)
     return results
 
 

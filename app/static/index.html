@@ -104,6 +104,21 @@
         </div>
       </div>
 
+      <form id="add-item-url-form" class="manual-url-bar">
+        <div class="manual-url-label">
+          <strong>Track Specific Item URL</strong>
+          <span class="muted">Paste one or more equip-bid.com/auction/.../item/... links to list &amp; track directly</span>
+        </div>
+        <div class="manual-url-controls">
+          <input type="text" id="manual-item-url" placeholder="https://www.equip-bid.com/auction/48423/item/12963" required />
+          <label class="checkbox-row">
+            <input type="checkbox" id="manual-item-watch" checked />
+            <span>Mark Watched</span>
+          </label>
+          <button type="submit" id="btn-add-item-url" class="btn btn-primary btn-sm">+ Add Item Link</button>
+        </div>
+      </form>
+
       <div class="toolbar">
         <div class="toolbar-filters">
           <select id="filter-search-id" title="Filter by Saved Search">

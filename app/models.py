@@ -90,6 +90,11 @@ class ItemFlagUpdate(BaseModel):
     value: bool = True
 
 
+class ManualItemAddRequest(BaseModel):
+    url: str = Field(..., min_length=5, max_length=2000)
+    watch: bool = True
+
+
 class NotificationChannelCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     channel_type: ChannelType

@@ -204,3 +204,54 @@ def test_site_settings_and_search_defaults(monkeypatch, tmp_path):
         assert captured_auction_calls[-1]["zip_code"] == ""
         assert captured_auction_calls[-1]["distance_radius"] == -1
         assert captured_auction_calls[-1]["include_shippable_out_of_range"] is True
+
+
+def test_add_manual_item_from_url(monkeypatch, tmp_path):
+    db_file = str(tmp_path / "manual_url_test.db")
+    monkeypatch.setattr(config, "DATABASE_PATH", db_file)
+
+    async def fake_scrape_single_lot(auction_id: str, lot_number: str):
+        return {
+            "lot_key": f"{auction_id}:{lot_number}",
+            "auction_id": auction_id,
+            "lot_number": lot_number,
+            "internal_lot_id": "10997008",
+            "title": "AMD Desktop Processor Ryzen 3 4100",
+            "url": f"https://www.equip-bid.com/auction/{auction_id}/item/{lot_number}",
+            "image_url": "https://cdn.example.com/cpu.jpg",
+            "current_bid": 1.0,
+            "next_required_bid": 2.0,
+            "high_bidder": "#138285",
+            "auction_title": "KC Market House",
+            "affiliate": "KC Market House",
+            "location": "Blue Springs, MO 64015",
+            "category": "Retail Goods > Pc",
+            "shipping_info": "Shipping Available" if auction_id == "48386" else "No Shipping",
+            "closing_time_raw": "Sat, Nov 14, 2026 5:31pm CST",
+            "closing_at": "2026-11-14T23:31:00Z",
+            "time_remaining_raw": "1d 4h",
+        }
+
+    monkeypatch.setattr("app.scraper.scrape_single_lot", fake_scrape_single_lot)
+
+    with TestClient(app) as client:
+        bad = client.post("/api/items/from-url", json={"url": "https://example.com/not-equipbid"})
+        assert bad.status_code == 400
+
+        res = client.post(
+            "/api/items/from-url",
+            json={
+                "url": "https://www.equip-bid.com/auction/48423/item/12963\nhttps://www.equip-bid.com/auction/48386/item/6003",
+                "watch": True,
+            },
+        )
+        assert res.status_code == 201
+        body = res.json()
+        assert body["count"] == 2
+        assert body["items"][0]["is_watched"] is True
+        assert body["items"][0]["shipping_info"] == "No Shipping"
+        assert body["items"][1]["shipping_info"] == "Shipping Available"
+
+        manual_items = client.get("/api/items?manual_only=true").json()
+        assert len(manual_items) == 2
+        assert {i["lot_key"] for i in manual_items} == {"48423:12963", "48386:6003"}

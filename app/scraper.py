@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -15,8 +16,24 @@ from app import config
 _ITEM_HREF_RE = re.compile(r"/auction/(\d+)/item/(\d+)")
 _AUCTION_HREF_RE = re.compile(r"^/auction/(\d+)(?:\?|$)")
 _ITEM_TITLE_ID_RE = re.compile(r"^itemTitle(\d+)$")
+_LOT_NUM_TITLE_RE = re.compile(r"^Lot\s*#?\s*\d+$", re.IGNORECASE)
 _CLOSING_DT_RE = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})\s*(\d{1,2}:\d{2}\s*[ap]m)", re.IGNORECASE)
+_CLOSING_NAMED_DT_RE = re.compile(
+    r"([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})\s*(\d{1,2}:\d{2})\s*([ap]m)(?:\s*([A-Z]{2,4}))?",
+    re.IGNORECASE,
+)
 _UTC_OFFSET_RE = re.compile(r"([+-]\d{2}):?(\d{2})")
+_TZ_ABBR_OFFSETS = {
+    "CST": -6,
+    "CDT": -5,
+    "EST": -5,
+    "EDT": -4,
+    "MST": -7,
+    "MDT": -6,
+    "PST": -8,
+    "PDT": -7,
+    "UTC": 0,
+}
 _CURRENCY_RE = re.compile(r"[\d,]+(?:\.\d{1,2})?")
 _REL_WEEK_RE = re.compile(r"(\d+)\s*w", re.IGNORECASE)
 _REL_DAY_RE = re.compile(r"(\d+)\s*d", re.IGNORECASE)
@@ -83,7 +100,7 @@ def parse_equipbid_closing_time(
     timer_text: str = "",
     now_utc: Optional[datetime] = None,
 ) -> Optional[str]:
-    """Parse Equip-Bid closing time (handles missing space like '11/18/202602:32 pm CST')."""
+    """Parse Equip-Bid closing time (numeric or named month date formats)."""
     if closing_raw:
         match = _CLOSING_DT_RE.search(closing_raw)
         if match:
@@ -96,6 +113,25 @@ def parse_equipbid_closing_time(
                 return aware.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             except ValueError:
                 pass
+
+        named_match = _CLOSING_NAMED_DT_RE.search(closing_raw)
+        if named_match:
+            date_part = re.sub(r"\s+", " ", named_match.group(1).strip())
+            time_part = f"{named_match.group(2)} {named_match.group(3).upper()}"
+            abbr = (named_match.group(4) or "").upper()
+            for fmt in ("%b %d, %Y %I:%M %p", "%B %d, %Y %I:%M %p"):
+                try:
+                    naive = datetime.strptime(f"{date_part} {time_part}", fmt)
+                    if tz_title and _UTC_OFFSET_RE.search(tz_title):
+                        tz = parse_utc_offset(tz_title)
+                    elif abbr in _TZ_ABBR_OFFSETS:
+                        tz = timezone(timedelta(hours=_TZ_ABBR_OFFSETS[abbr]))
+                    else:
+                        tz = parse_utc_offset(tz_title)
+                    aware = naive.replace(tzinfo=tz)
+                    return aware.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                except ValueError:
+                    continue
     return parse_relative_timer(timer_text, now_utc=now_utc)
 
 
@@ -552,6 +588,167 @@ async def _fetch_auction_list_page(
     resp = await client.get(f"{config.EQUIPBID_BASE_URL}/auction/list", params=params)
     resp.raise_for_status()
     return parse_auction_list_html(resp.text)
+
+
+def extract_lot_ids_from_url(url_or_text: str) -> list[tuple[str, str]]:
+    """Extract deduplicated (auction_id, lot_number) pairs from Equip-Bid item URLs or text."""
+    results: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _ITEM_HREF_RE.finditer(url_or_text or ""):
+        pair = (match.group(1), match.group(2))
+        if pair not in seen:
+            seen.add(pair)
+            results.append(pair)
+    return results
+
+
+def _extract_galleria_first_image(soup: BeautifulSoup) -> str:
+    """Extract primary lot image URL from Galleria initialization script."""
+    decoder = json.JSONDecoder()
+    for script in soup.find_all("script"):
+        body = script.string or script.get_text() or ""
+        idx = body.find("dataSource")
+        if idx == -1:
+            continue
+        bracket_pos = body.find("[", idx)
+        if bracket_pos == -1:
+            continue
+        try:
+            data, _ = decoder.raw_decode(body, bracket_pos)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, dict):
+                candidate = first.get("image") or first.get("thumb") or ""
+                if candidate:
+                    return _abs_url(str(candidate))
+    return ""
+
+
+def parse_single_lot_html(
+    html: str,
+    auction_id: str,
+    lot_number: str,
+    now_utc: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """Parse an individual Equip-Bid lot page (/auction/{id}/item/{lot})."""
+    soup = BeautifulSoup(html, "html.parser")
+    lot_key = f"{auction_id}:{lot_number}"
+    url = _abs_url(f"/auction/{auction_id}/item/{lot_number}")
+
+    title = ""
+    for span in soup.select(".lot-detail span.lot-title"):
+        txt = span.get_text(" ", strip=True)
+        if txt and not _LOT_NUM_TITLE_RE.match(txt):
+            title = txt
+            break
+    if not title and soup.title:
+        raw_page_title = soup.title.get_text(" ", strip=True)
+        if "|" in raw_page_title:
+            title = raw_page_title.split("|", 1)[0].strip()
+    if not title:
+        raise ValueError(f"Could not locate lot title on page for {lot_key}")
+
+    internal_lot_id = ""
+    guid_el = soup.select_one("span.lot-guid")
+    if guid_el:
+        guid_match = re.search(r"(\d+)$", guid_el.get_text(" ", strip=True))
+        if guid_match:
+            internal_lot_id = guid_match.group(1)
+
+    bid_el = soup.select_one('span[id^="lot_current_bid_lot_equip-bid_"]')
+    if not internal_lot_id and bid_el and bid_el.get("id"):
+        id_match = re.search(r"_(\d+)$", bid_el["id"])
+        if id_match:
+            internal_lot_id = id_match.group(1)
+
+    next_bid_el = soup.select_one('span[id^="lot_next_required_bid_lot_equip-bid_"]')
+    high_bidder_el = soup.select_one('span[id^="lot_current_high_bidder_detail_lot_equip-bid_"]')
+    timer_el = soup.select_one('h1.lot-timer, [id^="lot_timer_lot_equip-bid_"]')
+    close_el = soup.find(id="lot_scheduled_close")
+
+    current_bid = parse_currency(bid_el.get_text(" ", strip=True)) if bid_el else 0.0
+    if current_bid is None:
+        current_bid = 0.0
+    next_required_bid = (
+        parse_currency(next_bid_el.get_text(" ", strip=True)) if next_bid_el else None
+    )
+    high_bidder_raw = high_bidder_el.get_text(" ", strip=True) if high_bidder_el else ""
+    high_bidder = re.sub(r"^High Bidder:\s*", "", high_bidder_raw, flags=re.IGNORECASE).strip()
+
+    auction_title_el = soup.select_one("#auction_title a, #auction_title")
+    auction_title = auction_title_el.get_text(" ", strip=True) if auction_title_el else ""
+    auction_title = re.sub(r"\s*\(Click to View Lots\)\s*$", "", auction_title, flags=re.IGNORECASE).strip()
+
+    affiliate_el = soup.select_one("#affiliate_name a, #affiliate_name")
+    affiliate = affiliate_el.get_text(" ", strip=True) if affiliate_el else ""
+
+    location_el = soup.select_one("#contact_info .col-sm-6 span, .lot-detail span.location p, .lot-detail span.location")
+    location = location_el.get_text(" ", strip=True) if location_el else ""
+
+    cat_links = [a.get_text(" ", strip=True) for a in soup.select("#lot_category a") if a.get_text(strip=True)]
+    category = " > ".join(cat_links)
+
+    shipping_info = ""
+    lot_desc = soup.find(id="lot_description")
+    if lot_desc:
+        for tr in lot_desc.select("table tr"):
+            cells = [td.get_text(" ", strip=True) for td in tr.find_all(["td", "th"])]
+            if len(cells) >= 2 and "shipping" in cells[0].lower():
+                ans = cells[1].strip().lower()
+                if ans == "yes":
+                    shipping_info = "Shipping Available"
+                elif ans == "no":
+                    shipping_info = "No Shipping"
+                elif "depend" in ans:
+                    shipping_info = "Shipping Depends Upon Item"
+                else:
+                    shipping_info = cells[1].strip()
+                break
+
+    closing_time_raw = close_el.get_text(" ", strip=True) if close_el else ""
+    time_remaining_raw = timer_el.get_text(" ", strip=True) if timer_el else ""
+    closing_at = parse_equipbid_closing_time(
+        closing_time_raw,
+        timer_text=time_remaining_raw,
+        now_utc=now_utc,
+    )
+    image_url = _extract_galleria_first_image(soup)
+
+    return {
+        "lot_key": lot_key,
+        "auction_id": str(auction_id),
+        "lot_number": str(lot_number),
+        "internal_lot_id": internal_lot_id,
+        "title": title,
+        "url": url,
+        "image_url": image_url,
+        "current_bid": current_bid,
+        "next_required_bid": next_required_bid,
+        "high_bidder": high_bidder,
+        "auction_title": auction_title,
+        "affiliate": affiliate,
+        "location": location,
+        "category": category,
+        "shipping_info": shipping_info,
+        "closing_time_raw": closing_time_raw,
+        "closing_at": closing_at,
+        "time_remaining_raw": time_remaining_raw,
+    }
+
+
+async def scrape_single_lot(auction_id: str, lot_number: str) -> dict[str, Any]:
+    """Fetch and parse a single Equip-Bid item detail page."""
+    url = f"{config.EQUIPBID_BASE_URL}/auction/{auction_id}/item/{lot_number}"
+    async with httpx.AsyncClient(
+        headers=_http_headers(),
+        timeout=config.REQUEST_TIMEOUT_SECONDS,
+        follow_redirects=True,
+    ) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return parse_single_lot_html(resp.text, auction_id=auction_id, lot_number=lot_number)
 
 
 async def scrape_live_auctions(

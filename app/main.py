@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from app import database, notifier, scheduler, scraper
 from app.models import (
     ItemFlagUpdate,
+    ManualItemAddRequest,
     NotificationChannelCreate,
     NotificationChannelUpdate,
     SavedSearchCreate,
@@ -205,6 +206,7 @@ async def list_items(
     watched_only: bool = False,
     closing_soon_only: bool = False,
     include_dismissed: bool = False,
+    manual_only: bool = False,
     max_bid: Optional[float] = None,
     q: Optional[str] = None,
     sort: str = Query(default="closing_asc"),
@@ -215,10 +217,35 @@ async def list_items(
         watched_only=watched_only,
         closing_soon_only=closing_soon_only,
         include_dismissed=include_dismissed,
+        manual_only=manual_only,
         max_bid=max_bid,
         q=q,
         sort=sort,
     )
+
+
+@app.post("/api/items/from-url", status_code=201)
+async def add_items_from_url(payload: ManualItemAddRequest) -> dict[str, Any]:
+    pairs = scraper.extract_lot_ids_from_url(payload.url)
+    if not pairs:
+        raise HTTPException(
+            status_code=400,
+            detail="No valid Equip-Bid item links found. Expected URLs like https://www.equip-bid.com/auction/48423/item/12963",
+        )
+    stored_items: list[dict[str, Any]] = []
+    for auction_id, lot_number in pairs:
+        try:
+            lot = await scraper.scrape_single_lot(auction_id, lot_number)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to fetch item {auction_id}:{lot_number} from Equip-Bid: {exc}",
+            ) from exc
+        stored, _ = database.upsert_matched_item(
+            lot, search_id=None, is_watched=payload.watch
+        )
+        stored_items.append(stored)
+    return {"items": stored_items, "count": len(stored_items)}
 
 
 @app.post("/api/items/{item_id}/read")

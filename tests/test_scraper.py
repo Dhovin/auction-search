@@ -277,3 +277,70 @@ async def test_scrape_search_lots_includes_shippable_out_of_range(monkeypatch):
     )
     assert [i["lot_key"] for i in items_local_only] == ["100:1"]
     assert len(FakeClient.calls) == 1
+
+
+def test_extract_lot_ids_from_url():
+    text = """
+    https://www.equip-bid.com/auction/48423/item/12963
+    https://www.equip-bid.com/auction/48386/item/6003 <- shipping available
+    https://www.equip-bid.com/auction/48423/item/12963?foo=bar
+    """
+    assert scraper.extract_lot_ids_from_url(text) == [
+        ("48423", "12963"),
+        ("48386", "6003"),
+    ]
+    assert scraper.extract_lot_ids_from_url("https://www.equip-bid.com/auction/list") == []
+
+
+def test_parse_single_lot_html():
+    html_no_ship = """
+    <html>
+      <head><title>Lot of Cisco Routers | Equip-Bid</title></head>
+      <body>
+        <div class="container lot-detail">
+          <h3 id="auction_title"><a href="/auction/48423">KC Liquidation (Click to View Lots)</a></h3>
+          <h4 id="affiliate_name"><a href="/affiliate-profile/detail/22355">Equip-Bid.com</a></h4>
+          <span class="lot-title">Lot of Cisco Routers, APC &amp; CyberPower UPS Units</span>
+          <span class="lot-title">Lot #12963</span>
+          <span class="lot-guid">Item: bd27-10999351</span>
+          <h1 class="lot-timer" id="lot_timer_lot_equip-bid_48423_10999351">2w 4d</h1>
+          <span id="lot_scheduled_close">Tue, Dec 1, 2026 7:30pm CST</span>
+          <span id="lot_current_high_bidder_detail_lot_equip-bid_48423_10999351">High Bidder: #36359</span>
+          <span class="lot-current-bid" id="lot_current_bid_lot_equip-bid_48423_10999351">$21.00</span>
+          <span id="lot_next_required_bid_lot_equip-bid_48423_10999351">$22.00</span>
+          <div id="lot_description">
+            <div id="lot_category"><a>Commercial &amp; Industrial</a> &gt; <a>Office Equipment</a></div>
+            <table><tr><td><small>Shipping:</small></td><td><small>No</small></td></tr></table>
+            <div id="contact_info"><div class="row"><div class="col-sm-6"><span>15411 Hangar Rd, Kansas City, MO 64147</span></div></div></div>
+          </div>
+        </div>
+        <script>
+          Galleria.run('.galleria', {
+            dataSource: [{"image":"https:\\/\\/cdn.example.com\\/48423\\/49476253.jpg","thumb":"https:\\/\\/cdn.example.com\\/48423\\/T_49476253.jpg"}]
+          });
+        </script>
+      </body>
+    </html>
+    """
+    lot = scraper.parse_single_lot_html(html_no_ship, "48423", "12963")
+    assert lot["lot_key"] == "48423:12963"
+    assert lot["internal_lot_id"] == "10999351"
+    assert lot["title"] == "Lot of Cisco Routers, APC & CyberPower UPS Units"
+    assert lot["auction_title"] == "KC Liquidation"
+    assert lot["affiliate"] == "Equip-Bid.com"
+    assert lot["location"] == "15411 Hangar Rd, Kansas City, MO 64147"
+    assert lot["category"] == "Commercial & Industrial > Office Equipment"
+    assert lot["current_bid"] == 21.0
+    assert lot["next_required_bid"] == 22.0
+    assert lot["high_bidder"] == "#36359"
+    assert lot["shipping_info"] == "No Shipping"
+    # Dec 1, 2026 7:30pm CST (-06:00) == 2026-12-02T01:30:00Z
+    assert lot["closing_at"] == "2026-12-02T01:30:00Z"
+    assert lot["image_url"] == "https://cdn.example.com/48423/49476253.jpg"
+
+    html_ship_yes = html_no_ship.replace("<small>No</small>", "<small>Yes</small>").replace(
+        "Tue, Dec 1, 2026 7:30pm CST", "Sat, Nov 14, 2026 5:31pm CST"
+    )
+    lot_ship = scraper.parse_single_lot_html(html_ship_yes, "48386", "6003")
+    assert lot_ship["shipping_info"] == "Shipping Available"
+    assert lot_ship["closing_at"] == "2026-11-14T23:31:00Z"

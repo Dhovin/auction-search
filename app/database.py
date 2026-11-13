@@ -302,7 +302,10 @@ def delete_search(search_id: int, db_path: Optional[str] = None) -> bool:
 # ---------------------------------------------------------------------------
 
 def upsert_matched_item(
-    item: dict[str, Any], search_id: Optional[int], db_path: Optional[str] = None
+    item: dict[str, Any],
+    search_id: Optional[int],
+    db_path: Optional[str] = None,
+    is_watched: Optional[bool] = None,
 ) -> tuple[dict[str, Any], bool]:
     """Insert or update a matched lot. Returns (item_dict, is_new)."""
     now = utc_now_iso()
@@ -321,7 +324,7 @@ def upsert_matched_item(
                     shipping_info, closing_time_raw, closing_at, time_remaining_raw,
                     is_read, is_watched, is_dismissed, new_alert_sent,
                     closing_soon_alert_sent, first_seen_at, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, ?, ?)
                 """,
                 (
                     lot_key,
@@ -343,6 +346,7 @@ def upsert_matched_item(
                     item.get("closing_time_raw", ""),
                     item.get("closing_at"),
                     item.get("time_remaining_raw", ""),
+                    1 if is_watched else 0,
                     now,
                     now,
                 ),
@@ -352,6 +356,7 @@ def upsert_matched_item(
             ).fetchone()
             return _row_to_item(row), True
 
+        force_watch = 1 if is_watched is True else 0
         conn.execute(
             """
             UPDATE matched_items
@@ -371,6 +376,8 @@ def upsert_matched_item(
                 closing_time_raw = ?,
                 closing_at = COALESCE(?, closing_at),
                 time_remaining_raw = ?,
+                is_watched = CASE WHEN ? = 1 THEN 1 ELSE is_watched END,
+                is_dismissed = CASE WHEN ? = 1 THEN 0 ELSE is_dismissed END,
                 last_seen_at = ?
             WHERE id = ?
             """,
@@ -398,6 +405,8 @@ def upsert_matched_item(
                 item.get("closing_time_raw", ""),
                 item.get("closing_at"),
                 item.get("time_remaining_raw", ""),
+                force_watch,
+                force_watch,
                 now,
                 existing["id"],
             ),
@@ -442,6 +451,7 @@ def list_items(
     watched_only: bool = False,
     closing_soon_only: bool = False,
     include_dismissed: bool = False,
+    manual_only: bool = False,
     max_bid: Optional[float] = None,
     q: Optional[str] = None,
     sort: str = "closing_asc",
@@ -452,7 +462,9 @@ def list_items(
 
     if not include_dismissed:
         where.append("m.is_dismissed = 0")
-    if search_id is not None:
+    if manual_only:
+        where.append("m.search_id IS NULL")
+    elif search_id is not None:
         where.append("m.search_id = ?")
         params.append(search_id)
     if unread_only:
@@ -493,6 +505,15 @@ def list_items(
     """
     with get_connection(db_path) as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
+        return [_row_to_item(r) for r in rows]
+
+
+def list_manual_active_items(db_path: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return active non-dismissed items that were added manually by URL."""
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM matched_items WHERE search_id IS NULL AND is_dismissed = 0 ORDER BY id DESC"
+        ).fetchall()
         return [_row_to_item(r) for r in rows]
 
 

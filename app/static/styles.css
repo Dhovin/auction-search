@@ -927,6 +927,50 @@ textarea:focus {
   margin: 3px 0;
 }
 
+.manual-url-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+}
+
+.manual-url-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.88rem;
+}
+
+.manual-url-label .muted {
+  font-size: 0.76rem;
+}
+
+.manual-url-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: 1 1 360px;
+  justify-content: flex-end;
+}
+
+.manual-url-controls input[type="text"] {
+  flex: 1 1 280px;
+  min-width: 240px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 0.86rem;
+}
+
 @media (max-width: 768px) {
   .inline-field input,
   .inline-field select,
@@ -937,5 +981,9 @@ textarea:focus {
 
   .inline-field {
     flex: 1 1 130px;
+  }
+
+  .manual-url-controls input[type="text"] {
+    min-width: 100%;
   }
 }
