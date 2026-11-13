@@ -32,6 +32,7 @@ async def test_all_http_channels_dispatch(monkeypatch, tmp_path):
         ("ntfy", "ntfy", {"server_url": "https://ntfy.sh", "topic": "test-topic", "token": "tok"}),
         ("Gotify", "gotify", {"server_url": "https://gotify.example.com", "app_token": "g-tok", "priority": 7}),
         ("Pushover", "pushover", {"user_key": "u123", "api_token": "a456", "priority": 1}),
+        ("Pushbullet", "pushbullet", {"access_token": "pb-tok", "device_iden": "dev1"}),
         ("Telegram", "telegram", {"bot_token": "bot123", "chat_id": "999"}),
     ]
     for name, ctype, cfg in channels_to_add:
@@ -63,7 +64,7 @@ async def test_all_http_channels_dispatch(monkeypatch, tmp_path):
     )
 
     assert log["status"] == "success"
-    assert len(calls) == 7
+    assert len(calls) == 8
     urls = [c[0] for c in calls]
     assert "https://discord.com/api/webhooks/123" in urls
     assert "https://hooks.slack.com/services/abc" in urls
@@ -71,6 +72,7 @@ async def test_all_http_channels_dispatch(monkeypatch, tmp_path):
     assert "https://ntfy.sh/test-topic" in urls
     assert "https://gotify.example.com/message" in urls
     assert "https://api.pushover.net/1/messages.json" in urls
+    assert "https://api.pushbullet.com/v2/pushes" in urls
     assert "https://api.telegram.org/botbot123/sendMessage" in urls
 
 

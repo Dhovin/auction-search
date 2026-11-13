@@ -20,6 +20,7 @@ from app.models import (
     NotificationChannelUpdate,
     SavedSearchCreate,
     SavedSearchUpdate,
+    SiteSettingsUpdate,
 )
 
 logging.basicConfig(
@@ -111,6 +112,20 @@ async def get_stats() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Site-Wide Settings API
+# ---------------------------------------------------------------------------
+
+@app.get("/api/settings")
+async def get_settings() -> dict[str, Any]:
+    return database.get_site_settings()
+
+
+@app.put("/api/settings")
+async def update_settings(payload: SiteSettingsUpdate) -> dict[str, Any]:
+    return database.update_site_settings(payload.model_dump(exclude_unset=True))
+
+
+# ---------------------------------------------------------------------------
 # Saved Searches API
 # ---------------------------------------------------------------------------
 
@@ -122,6 +137,14 @@ async def list_searches() -> list[dict[str, Any]]:
 @app.post("/api/searches", status_code=201)
 async def create_search(payload: SavedSearchCreate) -> dict[str, Any]:
     data = payload.model_dump()
+    settings = database.get_site_settings()
+    if "check_interval_minutes" not in payload.model_fields_set:
+        data["check_interval_minutes"] = int(settings.get("default_check_interval_minutes") or 30)
+    if "closing_soon_hours" not in payload.model_fields_set:
+        default_closing = settings.get("default_closing_soon_hours")
+        data["closing_soon_hours"] = (
+            float(default_closing) if default_closing and float(default_closing) > 0 else None
+        )
     run_now = data.pop("run_immediately", False)
     created = database.create_search(data)
     if run_now:
@@ -233,11 +256,20 @@ async def get_live_auctions(
     zip_code: str = "",
     distance_radius: int = -1,
     sort_field: str = "end",
+    use_defaults: bool = True,
 ) -> list[dict[str, Any]]:
+    effective_zip = zip_code.strip()
+    effective_distance = distance_radius
+    if use_defaults:
+        settings = database.get_site_settings()
+        if not effective_zip:
+            effective_zip = str(settings.get("default_zip_code") or "").strip()
+        if effective_distance == -1:
+            effective_distance = int(settings.get("default_distance_radius", -1))
     try:
         return await scraper.scrape_live_auctions(
-            zip_code=zip_code,
-            distance_radius=distance_radius,
+            zip_code=effective_zip,
+            distance_radius=effective_distance,
             sort_field=sort_field,
         )
     except Exception as exc:
@@ -257,11 +289,23 @@ async def get_live_search(
     sort_field: str = "close",
     max_pages: int = Query(default=1, ge=1, le=5),
 ) -> list[dict[str, Any]]:
+    settings = database.get_site_settings()
+    effective_zip = zip_code.strip() or str(settings.get("default_zip_code") or "").strip()
+    effective_distance = (
+        distance_radius
+        if distance_radius != -1
+        else int(settings.get("default_distance_radius", -1))
+    )
+    combined_exclude = ", ".join(
+        part.strip()
+        for part in (exclude_words, str(settings.get("global_exclude_words") or ""))
+        if part and part.strip()
+    )
     try:
         items = await scraper.scrape_search_lots(
             keywords=keywords,
-            zip_code=zip_code,
-            distance_radius=distance_radius,
+            zip_code=effective_zip,
+            distance_radius=effective_distance,
             min_bid=min_bid,
             max_bid=max_bid,
             auction_id=auction_id,
@@ -273,7 +317,7 @@ async def get_live_search(
 
     filter_cfg = {
         "must_include": must_include,
-        "exclude_words": exclude_words,
+        "exclude_words": combined_exclude,
         "min_bid": min_bid,
         "max_bid": max_bid,
     }

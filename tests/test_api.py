@@ -120,3 +120,80 @@ def test_full_api_workflow(monkeypatch, tmp_path):
 
         # Delete saved search
         assert client.delete(f"/api/searches/{search_id}").status_code == 200
+
+
+def test_site_settings_and_search_defaults(monkeypatch, tmp_path):
+    db_file = str(tmp_path / "settings_test.db")
+    monkeypatch.setattr(config, "DATABASE_PATH", db_file)
+
+    captured_lot_calls = []
+    captured_auction_calls = []
+
+    async def fake_scrape_search_lots(**kwargs):
+        captured_lot_calls.append(kwargs)
+        return [
+            {
+                "lot_key": "9001:101",
+                "auction_id": "9001",
+                "lot_number": "101",
+                "title": "DeWalt 20V Impact Driver",
+                "url": "https://www.equip-bid.com/auction/9001/item/101",
+                "current_bid": 45.0,
+            },
+            {
+                "lot_key": "9001:102",
+                "auction_id": "9001",
+                "lot_number": "102",
+                "title": "DeWalt 20V Impact Driver Damaged Box",
+                "url": "https://www.equip-bid.com/auction/9001/item/102",
+                "current_bid": 25.0,
+            },
+        ]
+
+    async def fake_scrape_live_auctions(**kwargs):
+        captured_auction_calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr("app.scraper.scrape_search_lots", fake_scrape_search_lots)
+    monkeypatch.setattr("app.scraper.scrape_live_auctions", fake_scrape_live_auctions)
+
+    with TestClient(app) as client:
+        defaults = client.get("/api/settings").json()
+        assert defaults["default_zip_code"] == ""
+        assert defaults["default_distance_radius"] == -1
+
+        updated = client.put(
+            "/api/settings",
+            json={
+                "default_zip_code": " 64108 ",
+                "default_distance_radius": 50,
+                "global_exclude_words": "damaged",
+                "default_check_interval_minutes": 15,
+                "default_closing_soon_hours": 6.0,
+            },
+        ).json()
+        assert updated["default_zip_code"] == "64108"
+        assert updated["default_distance_radius"] == 50
+        assert updated["global_exclude_words"] == "damaged"
+
+        created = client.post(
+            "/api/searches",
+            json={
+                "name": "KC DeWalt",
+                "keywords": "dewalt",
+                "run_immediately": True,
+            },
+        ).json()
+        assert created["check_interval_minutes"] == 15
+        assert created["closing_soon_hours"] == 6.0
+        assert created["last_run_result"]["matched"] == 1
+        assert captured_lot_calls[-1]["zip_code"] == "64108"
+        assert captured_lot_calls[-1]["distance_radius"] == 50
+
+        client.get("/api/live-auctions")
+        assert captured_auction_calls[-1]["zip_code"] == "64108"
+        assert captured_auction_calls[-1]["distance_radius"] == 50
+
+        client.get("/api/live-auctions?use_defaults=false")
+        assert captured_auction_calls[-1]["zip_code"] == ""
+        assert captured_auction_calls[-1]["distance_radius"] == -1

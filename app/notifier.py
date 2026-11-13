@@ -232,6 +232,27 @@ async def send_via_channel(
             )
             resp.raise_for_status()
 
+        elif ctype == "pushbullet":
+            access_token = (cfg.get("access_token") or "").strip()
+            if not access_token:
+                raise ValueError("Pushbullet access_token is required")
+            payload: dict[str, Any] = {
+                "type": "link",
+                "title": title[:250],
+                "body": message[:2048],
+                "url": item_url,
+            }
+            if (cfg.get("device_iden") or "").strip():
+                payload["device_iden"] = cfg["device_iden"].strip()
+            if (cfg.get("channel_tag") or "").strip():
+                payload["channel_tag"] = cfg["channel_tag"].strip()
+            resp = await client.post(
+                "https://api.pushbullet.com/v2/pushes",
+                headers={"Access-Token": access_token},
+                json=payload,
+            )
+            resp.raise_for_status()
+
         else:
             raise ValueError(f"Unsupported channel type: {ctype}")
 

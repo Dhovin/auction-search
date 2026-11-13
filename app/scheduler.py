@@ -37,10 +37,30 @@ async def execute_saved_search(
     if not search:
         raise ValueError(f"Saved search {search_id} not found")
 
+    settings = database.get_site_settings(db_path=db_path)
+    effective_zip = (search.get("zip_code") or "").strip() or str(
+        settings.get("default_zip_code") or ""
+    ).strip()
+    search_dist = int(search.get("distance_radius", -1))
+    effective_distance = (
+        search_dist
+        if search_dist != -1
+        else int(settings.get("default_distance_radius", -1))
+    )
+    combined_exclude = ", ".join(
+        part.strip()
+        for part in (search.get("exclude_words", ""), settings.get("global_exclude_words", ""))
+        if part and str(part).strip()
+    )
+    effective_search = dict(search)
+    effective_search["zip_code"] = effective_zip
+    effective_search["distance_radius"] = effective_distance
+    effective_search["exclude_words"] = combined_exclude
+
     raw_items = await scraper.scrape_search_lots(
         keywords=search["keywords"],
-        zip_code=search.get("zip_code", ""),
-        distance_radius=int(search.get("distance_radius", -1)),
+        zip_code=effective_zip,
+        distance_radius=effective_distance,
         min_bid=search.get("min_bid"),
         max_bid=search.get("max_bid"),
         auction_id=search.get("auction_id", ""),
@@ -48,7 +68,7 @@ async def execute_saved_search(
         max_pages=int(search.get("max_pages", 2)),
     )
 
-    matched = [item for item in raw_items if scraper.filter_lot_item(item, search)]
+    matched = [item for item in raw_items if scraper.filter_lot_item(item, effective_search)]
     now_utc = datetime.now(timezone.utc)
     new_alerts = 0
     closing_alerts = 0

@@ -8,6 +8,125 @@ const state = {
   channels: [],
   alerts: [],
   auctions: [],
+  settings: {
+    default_zip_code: "",
+    default_distance_radius: -1,
+    global_exclude_words: "",
+    default_check_interval_minutes: 30,
+    default_closing_soon_hours: 4,
+  },
+};
+
+const PLATFORM_GUIDES = {
+  email: {
+    title: "Email (SMTP) Setup Guide",
+    steps: [
+      "For Gmail, enable 2-Step Verification on your Google account and create a 16-character App Password (your regular password will fail).",
+      "Common settings: smtp.gmail.com port 587 with STARTTLS checked, or port 465 for SSL.",
+      "Enter your email address in SMTP Username, From Address, and Recipient Emails.",
+    ],
+    links: [
+      { label: "Google App Passwords", url: "https://myaccount.google.com/apppasswords" },
+      { label: "Gmail SMTP Docs", url: "https://support.google.com/mail/answer/7126229" },
+      { label: "Fastmail App Passwords", url: "https://www.fastmail.help/hc/en-us/articles/360058753834-App-passwords" },
+    ],
+  },
+  discord: {
+    title: "Discord Webhook Setup Guide",
+    steps: [
+      "Open your Discord server -> Channel Settings (gear icon) -> Integrations -> Webhooks.",
+      "Click New Webhook, choose the target text channel, and click Copy Webhook URL.",
+      "Paste the https://discord.com/api/webhooks/... URL below and test delivery.",
+    ],
+    links: [
+      { label: "Discord Webhooks Guide", url: "https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" },
+    ],
+  },
+  slack: {
+    title: "Slack Webhook Setup Guide",
+    steps: [
+      "Open Slack API Apps and click Create New App -> From scratch.",
+      "Under Features, open Incoming Webhooks and toggle Activate Incoming Webhooks on.",
+      "Click Add New Webhook to Workspace, pick a channel, and paste the https://hooks.slack.com/services/... URL.",
+    ],
+    links: [
+      { label: "Slack Incoming Webhooks Docs", url: "https://api.slack.com/messaging/webhooks" },
+      { label: "Create a Slack App", url: "https://api.slack.com/apps" },
+    ],
+  },
+  telegram: {
+    title: "Telegram Bot Setup Guide",
+    steps: [
+      "Message @BotFather on Telegram and send /newbot to generate your Bot Token.",
+      "Send /start in a direct chat with your new bot (or add it to a group chat).",
+      "Find your numeric Chat ID using @userinfobot or https://api.telegram.org/bot<TOKEN>/getUpdates.",
+    ],
+    links: [
+      { label: "Telegram Bot Tutorial", url: "https://core.telegram.org/bots/tutorial" },
+      { label: "Open @BotFather", url: "https://t.me/BotFather" },
+    ],
+  },
+  pushover: {
+    title: "Pushover Setup Guide",
+    steps: [
+      "Sign in to your Pushover dashboard and copy your User Key (shown at the top right).",
+      "Create a new Application / API Token for Equip-Bid Alerts and copy the API Token.",
+      "Optional: enter a Device Name to notify a single device, or leave blank for all devices.",
+    ],
+    links: [
+      { label: "Pushover Dashboard", url: "https://pushover.net/" },
+      { label: "Create Pushover App Token", url: "https://pushover.net/apps/build" },
+      { label: "Pushover API Docs", url: "https://pushover.net/api" },
+    ],
+  },
+  pushbullet: {
+    title: "Pushbullet Setup Guide",
+    steps: [
+      "Open Pushbullet Account Settings and scroll to Access Tokens.",
+      "Click Create Access Token and paste the token (o....) below.",
+      "Optional: enter a Device Iden or Channel Tag to restrict or broadcast pushes.",
+    ],
+    links: [
+      { label: "Pushbullet Account Settings", url: "https://www.pushbullet.com/#settings/account" },
+      { label: "Pushbullet API Docs", url: "https://docs.pushbullet.com/" },
+    ],
+  },
+  ntfy: {
+    title: "ntfy Push Setup Guide",
+    steps: [
+      "Choose a unique, hard-to-guess Topic Name (e.g. equipbid-kc-deals-9482) since public ntfy.sh topics have no password by default.",
+      "Subscribe to that exact topic name in the ntfy mobile app or web app.",
+      "For a private or self-hosted server, set your Server URL and Access Token (tk_...).",
+    ],
+    links: [
+      { label: "ntfy Official Docs", url: "https://docs.ntfy.sh/" },
+      { label: "ntfy.sh Web App", url: "https://ntfy.sh/app" },
+    ],
+  },
+  gotify: {
+    title: "Gotify Setup Guide",
+    steps: [
+      "Open your self-hosted Gotify web UI -> Apps -> Create Application.",
+      "Enter your base Server URL (e.g. https://gotify.yourdomain.com) and copy the App Token.",
+      "Priority defaults to 5 (range 1-10); higher priority triggers urgent phone notifications.",
+    ],
+    links: [
+      { label: "Gotify Docs", url: "https://gotify.net/docs/index" },
+      { label: "Gotify Push Messages", url: "https://gotify.net/docs/pushmsg" },
+    ],
+  },
+  webhook: {
+    title: "Custom Webhook Setup Guide",
+    steps: [
+      "Provide any HTTP/HTTPS endpoint accepting JSON POST requests.",
+      "Payloads include alert_type, title, item (title, current_bid, next_required_bid, closing_at, url), search, and sent_at.",
+      "Optionally provide Custom Headers as JSON, e.g. {\"Authorization\": \"Bearer TOKEN\"}.",
+    ],
+    links: [
+      { label: "Home Assistant Webhook Docs", url: "https://www.home-assistant.io/docs/automation/trigger/#webhook-trigger" },
+      { label: "n8n Webhook Node Docs", url: "https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.webhook/" },
+    ],
+  },
 };
 
 const CHANNEL_SCHEMAS = {
@@ -46,6 +165,11 @@ const CHANNEL_SCHEMAS = {
     { key: "user_key", label: "Pushover User Key *", type: "text", placeholder: "" },
     { key: "api_token", label: "Pushover API Token *", type: "password", placeholder: "" },
     { key: "priority", label: "Priority (-2 to 2)", type: "number", placeholder: "0", default: 0 },
+  ],
+  pushbullet: [
+    { key: "access_token", label: "Pushbullet Access Token *", type: "password", placeholder: "o.xxxxxxxxxxxxxxxx" },
+    { key: "device_iden", label: "Target Device ID (optional, blank = all devices)", type: "text", placeholder: "" },
+    { key: "channel_tag", label: "Channel Tag (optional)", type: "text", placeholder: "" },
   ],
   telegram: [
     { key: "bot_token", label: "Telegram Bot Token *", type: "password", placeholder: "123456:ABC-DEF..." },
@@ -205,6 +329,56 @@ async function loadChannels() {
   renderChannels();
 }
 
+function renderSiteSettings() {
+  const s = state.settings || {};
+  const zipEl = document.getElementById("global-zip");
+  const distEl = document.getElementById("global-distance");
+  const excEl = document.getElementById("global-exclude");
+  const intEl = document.getElementById("global-interval");
+  const closeEl = document.getElementById("global-closing-hours");
+  if (zipEl) zipEl.value = s.default_zip_code || "";
+  if (distEl) distEl.value = String(s.default_distance_radius ?? -1);
+  if (excEl) excEl.value = s.global_exclude_words || "";
+  if (intEl) intEl.value = s.default_check_interval_minutes ?? 30;
+  if (closeEl) closeEl.value = s.default_closing_soon_hours ?? 4;
+
+  const aucZipEl = document.getElementById("auctions-zip");
+  const aucDistEl = document.getElementById("auctions-distance");
+  if (aucZipEl && !aucZipEl.dataset.touched && !aucZipEl.value) {
+    aucZipEl.value = s.default_zip_code || "";
+  }
+  if (aucDistEl && !aucDistEl.dataset.touched) {
+    aucDistEl.value = String(s.default_distance_radius ?? -1);
+  }
+}
+
+async function loadSettings() {
+  state.settings = await api("/api/settings");
+  renderSiteSettings();
+}
+
+async function saveSiteSettings() {
+  const closingRaw = document.getElementById("global-closing-hours").value.trim();
+  const payload = {
+    default_zip_code: document.getElementById("global-zip").value.trim(),
+    default_distance_radius: Number(document.getElementById("global-distance").value),
+    global_exclude_words: document.getElementById("global-exclude").value.trim(),
+    default_check_interval_minutes: Number(document.getElementById("global-interval").value || 30),
+    default_closing_soon_hours: closingRaw === "" ? 0 : Number(closingRaw),
+  };
+  state.settings = await api("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+  const aucZipEl = document.getElementById("auctions-zip");
+  const aucDistEl = document.getElementById("auctions-distance");
+  if (aucZipEl && !aucZipEl.dataset.touched) aucZipEl.value = state.settings.default_zip_code || "";
+  if (aucDistEl && !aucDistEl.dataset.touched) aucDistEl.value = String(state.settings.default_distance_radius ?? -1);
+  renderSiteSettings();
+  renderSearches();
+  toast("Site-wide defaults saved", "ok");
+}
+
 async function loadAlerts() {
   state.alerts = await api("/api/alerts");
   renderAlerts();
@@ -331,8 +505,18 @@ function renderSearches() {
 
   list.innerHTML = state.searches
     .map((s) => {
-      const distLabel = s.distance_radius > 0 ? `${s.distance_radius} mi` : "Any distance";
-      const locText = s.zip_code ? `${esc(s.zip_code)} (${distLabel})` : "All locations";
+      const defZip = (state.settings.default_zip_code || "").trim();
+      const defDist = Number(state.settings.default_distance_radius ?? -1);
+      const effDist = s.distance_radius > 0 ? s.distance_radius : defDist;
+      const distLabel = effDist > 0 ? `${effDist} mi` : "Any distance";
+      let locText = "All locations";
+      if (s.zip_code) {
+        locText = `${esc(s.zip_code)} (${distLabel})`;
+      } else if (defZip) {
+        locText = `Site default: ${esc(defZip)} (${distLabel})`;
+      } else if (effDist > 0) {
+        locText = `Site default distance (${effDist} mi)`;
+      }
       const bidLimits = [];
       if (s.min_bid != null) bidLimits.push(`Min $${s.min_bid}`);
       if (s.max_bid != null) bidLimits.push(`Max $${s.max_bid}`);
@@ -479,6 +663,12 @@ function renderAlerts() {
 // ---------------------------------------------------------------------------
 
 function openSearchModal(existing = null, prefill = {}) {
+  const settings = state.settings || {};
+  const defZip = (settings.default_zip_code || "").trim();
+  const defDist = Number(settings.default_distance_radius ?? -1);
+  const defInterval = settings.default_check_interval_minutes ?? 30;
+  const defClosing = settings.default_closing_soon_hours;
+
   document.getElementById("search-modal-title").textContent = existing ? "Edit Saved Search" : "New Saved Search";
   document.getElementById("search-id").value = existing ? existing.id : "";
   document.getElementById("search-name").value = existing ? existing.name : (prefill.name || "");
@@ -487,14 +677,27 @@ function openSearchModal(existing = null, prefill = {}) {
   document.getElementById("search-exclude").value = existing ? existing.exclude_words : "";
   document.getElementById("search-min-bid").value = existing && existing.min_bid != null ? existing.min_bid : "";
   document.getElementById("search-max-bid").value = existing && existing.max_bid != null ? existing.max_bid : "";
-  document.getElementById("search-zip").value = existing ? existing.zip_code : "";
-  document.getElementById("search-distance").value = existing ? String(existing.distance_radius) : "-1";
+
+  const zipInput = document.getElementById("search-zip");
+  zipInput.value = existing ? existing.zip_code : "";
+  zipInput.placeholder = defZip ? `Site default: ${defZip}` : "e.g. 64101";
+
+  const distSelect = document.getElementById("search-distance");
+  const defaultDistOption = distSelect.querySelector('option[value="-1"]');
+  if (defaultDistOption) {
+    defaultDistOption.textContent = defDist > 0
+      ? `Use Site Default (${defDist} miles)`
+      : "Use Site Default / Any Distance";
+  }
+  distSelect.value = existing ? String(existing.distance_radius) : "-1";
+
   document.getElementById("search-auction-id").value = existing ? existing.auction_id : (prefill.auction_id || "");
   document.getElementById("search-sort").value = existing ? existing.sort_field : "close";
-  document.getElementById("search-interval").value = existing ? existing.check_interval_minutes : 30;
+  document.getElementById("search-interval").value = existing ? existing.check_interval_minutes : defInterval;
   document.getElementById("search-pages").value = existing ? existing.max_pages : 2;
+  const newClosingVal = defClosing && Number(defClosing) > 0 ? String(defClosing) : "";
   document.getElementById("search-closing-hours").value =
-    existing ? (existing.closing_soon_hours != null ? existing.closing_soon_hours : "") : "4";
+    existing ? (existing.closing_soon_hours != null ? existing.closing_soon_hours : "") : newClosingVal;
   document.getElementById("search-alert-new").checked = existing ? existing.alert_on_new : true;
   document.getElementById("search-enabled").checked = existing ? existing.enabled : true;
 
@@ -591,6 +794,32 @@ function readChannelConfigFromForm(type, containerSelector = "#inline-channel-dy
   return cfg;
 }
 
+function renderPlatformGuide(type) {
+  const container = document.getElementById("inline-platform-guide");
+  if (!container) return;
+  const guide = PLATFORM_GUIDES[type];
+  if (!guide) {
+    container.innerHTML = "";
+    return;
+  }
+  const linksHtml = (guide.links || [])
+    .map(
+      (lnk) =>
+        `<a class="platform-guide-link" href="${esc(lnk.url)}" target="_blank" rel="noopener noreferrer">${esc(lnk.label)} &nearr;</a>`
+    )
+    .join("");
+  const stepsHtml = (guide.steps || [])
+    .map((step) => `<li>${esc(step)}</li>`)
+    .join("");
+  container.innerHTML = `
+    <div class="platform-guide-header">
+      <span class="platform-guide-title">${esc(guide.title)}</span>
+      <div class="platform-guide-links">${linksHtml}</div>
+    </div>
+    <ol class="platform-guide-steps">${stepsHtml}</ol>
+  `;
+}
+
 function setInlinePlatform(type, existingConfig = {}) {
   document.getElementById("inline-channel-type").value = type;
   document.querySelectorAll("#inline-platform-pills .platform-pill").forEach((pill) => {
@@ -604,12 +833,14 @@ function setInlinePlatform(type, existingConfig = {}) {
       slack: "Slack Alerts",
       telegram: "Telegram Alerts",
       pushover: "Pushover Alerts",
+      pushbullet: "Pushbullet Alerts",
       ntfy: "ntfy Push Alerts",
       gotify: "Gotify Alerts",
       webhook: "Custom Webhook",
     };
     nameInput.placeholder = `e.g. ${labelMap[type] || "My Alert Channel"}`;
   }
+  renderPlatformGuide(type);
   renderChannelFields(type, existingConfig, "inline-channel-dynamic-fields");
 }
 
@@ -705,6 +936,26 @@ function initEvents() {
   });
   document.getElementById("btn-add-search").addEventListener("click", () => openSearchModal());
   document.getElementById("btn-refresh-alerts").addEventListener("click", () => loadAlerts());
+
+  document.getElementById("global-defaults-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("btn-save-global-settings");
+    btn.disabled = true;
+    try {
+      await saveSiteSettings();
+    } catch (err) {
+      toast(`Failed to save defaults: ${err.message}`, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById("auctions-zip").addEventListener("input", (e) => {
+    e.target.dataset.touched = "1";
+  });
+  document.getElementById("auctions-distance").addEventListener("change", (e) => {
+    e.target.dataset.touched = "1";
+  });
 
   // Inline platform selector pills & channel form
   document.getElementById("inline-platform-pills").addEventListener("click", (e) => {
@@ -931,6 +1182,7 @@ function initEvents() {
         zip_code: document.getElementById("auctions-zip").value.trim(),
         distance_radius: document.getElementById("auctions-distance").value,
         sort_field: document.getElementById("auctions-sort").value,
+        use_defaults: "false",
       });
       state.auctions = await api(`/api/live-auctions?${qs.toString()}`);
       renderAuctions();
@@ -990,6 +1242,7 @@ function initEvents() {
 async function bootstrap() {
   initEvents();
   setInlinePlatform("email", {});
+  await loadSettings();
   await Promise.all([refreshStats(), loadSearches(), loadItems(), loadChannels()]);
   setInterval(() => {
     refreshStats();

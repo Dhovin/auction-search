@@ -119,8 +119,22 @@ def init_db(db_path: Optional[str] = None) -> None:
                 error_detail TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS site_settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL
+            );
             """
         )
+
+
+DEFAULT_SITE_SETTINGS: dict[str, Any] = {
+    "default_zip_code": "",
+    "default_distance_radius": -1,
+    "global_exclude_words": "",
+    "default_check_interval_minutes": 30,
+    "default_closing_soon_hours": 4.0,
+}
 
 
 def _row_to_search(row: sqlite3.Row) -> dict[str, Any]:
@@ -689,3 +703,37 @@ def get_dashboard_stats(db_path: Optional[str] = None) -> dict[str, Any]:
             "enabled_channels": enabled_channels,
             "recent_alerts_count": recent_alerts,
         }
+
+
+def get_site_settings(db_path: Optional[str] = None) -> dict[str, Any]:
+    """Return site-wide default settings merged with built-in defaults."""
+    settings = dict(DEFAULT_SITE_SETTINGS)
+    with get_connection(db_path) as conn:
+        rows = conn.execute("SELECT key, value_json FROM site_settings").fetchall()
+        for row in rows:
+            key = row["key"]
+            if key in DEFAULT_SITE_SETTINGS:
+                try:
+                    settings[key] = json.loads(row["value_json"])
+                except json.JSONDecodeError:
+                    pass
+    return settings
+
+
+def update_site_settings(
+    updates: dict[str, Any], db_path: Optional[str] = None
+) -> dict[str, Any]:
+    """Persist one or more site-wide settings and return the full updated settings."""
+    valid_updates = {k: v for k, v in updates.items() if k in DEFAULT_SITE_SETTINGS}
+    if valid_updates:
+        with get_connection(db_path) as conn:
+            for key, value in valid_updates.items():
+                conn.execute(
+                    """
+                    INSERT INTO site_settings (key, value_json)
+                    VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json
+                    """,
+                    (key, json.dumps(value)),
+                )
+    return get_site_settings(db_path=db_path)

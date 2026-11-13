@@ -14,6 +14,7 @@ ChannelType = Literal[
     "ntfy",
     "gotify",
     "pushover",
+    "pushbullet",
     "telegram",
 ]
 
@@ -99,3 +100,27 @@ class NotificationChannelUpdate(BaseModel):
     channel_type: Optional[ChannelType] = None
     config: Optional[dict[str, Any]] = None
     enabled: Optional[bool] = None
+
+
+class SiteSettingsUpdate(BaseModel):
+    default_zip_code: Optional[str] = Field(default=None, max_length=10)
+    default_distance_radius: Optional[int] = None
+    global_exclude_words: Optional[str] = Field(default=None, max_length=500)
+    default_check_interval_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+    default_closing_soon_hours: Optional[float] = Field(default=None, ge=0, le=168)
+
+    @field_validator("default_zip_code")
+    @classmethod
+    def normalize_default_zip(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.strip()
+
+    @field_validator("default_distance_radius")
+    @classmethod
+    def validate_default_distance(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value not in VALID_DISTANCES:
+            raise ValueError(
+                f"default_distance_radius must be one of {sorted(VALID_DISTANCES)}"
+            )
+        return value
