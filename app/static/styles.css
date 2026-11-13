@@ -863,6 +863,12 @@ textarea:focus {
   width: 82px;
 }
 
+.inline-checkbox {
+  padding-bottom: 6px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .platform-guide {
   background: rgba(59, 130, 246, 0.08);
   border: 1px solid rgba(59, 130, 246, 0.28);

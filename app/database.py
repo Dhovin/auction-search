@@ -52,6 +52,7 @@ def init_db(db_path: Optional[str] = None) -> None:
                 max_bid REAL NULL,
                 zip_code TEXT NOT NULL DEFAULT '',
                 distance_radius INTEGER NOT NULL DEFAULT -1,
+                include_shippable_out_of_range INTEGER NOT NULL DEFAULT 1,
                 auction_id TEXT NOT NULL DEFAULT '',
                 sort_field TEXT NOT NULL DEFAULT 'close',
                 max_pages INTEGER NOT NULL DEFAULT 2,
@@ -126,6 +127,14 @@ def init_db(db_path: Optional[str] = None) -> None:
             );
             """
         )
+        cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(saved_searches)").fetchall()
+        }
+        if "include_shippable_out_of_range" not in cols:
+            conn.execute(
+                "ALTER TABLE saved_searches ADD COLUMN include_shippable_out_of_range INTEGER NOT NULL DEFAULT 1"
+            )
 
 
 DEFAULT_SITE_SETTINGS: dict[str, Any] = {
@@ -134,6 +143,7 @@ DEFAULT_SITE_SETTINGS: dict[str, Any] = {
     "global_exclude_words": "",
     "default_check_interval_minutes": 30,
     "default_closing_soon_hours": 4.0,
+    "include_shippable_out_of_range": True,
 }
 
 
@@ -141,6 +151,7 @@ def _row_to_search(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["alert_on_new"] = bool(d["alert_on_new"])
     d["enabled"] = bool(d["enabled"])
+    d["include_shippable_out_of_range"] = bool(d.get("include_shippable_out_of_range", 1))
     return d
 
 
@@ -191,10 +202,10 @@ def create_search(data: dict[str, Any], db_path: Optional[str] = None) -> dict[s
             """
             INSERT INTO saved_searches (
                 name, keywords, must_include, exclude_words,
-                min_bid, max_bid, zip_code, distance_radius, auction_id,
-                sort_field, max_pages, check_interval_minutes,
+                min_bid, max_bid, zip_code, distance_radius, include_shippable_out_of_range,
+                auction_id, sort_field, max_pages, check_interval_minutes,
                 alert_on_new, closing_soon_hours, enabled, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 data["name"].strip(),
@@ -205,6 +216,7 @@ def create_search(data: dict[str, Any], db_path: Optional[str] = None) -> dict[s
                 data.get("max_bid"),
                 data.get("zip_code", "").strip(),
                 int(data.get("distance_radius", -1)),
+                1 if data.get("include_shippable_out_of_range", True) else 0,
                 data.get("auction_id", "").strip(),
                 data.get("sort_field", "close"),
                 int(data.get("max_pages", 2)),
@@ -232,6 +244,7 @@ def update_search(
         "max_bid",
         "zip_code",
         "distance_radius",
+        "include_shippable_out_of_range",
         "auction_id",
         "sort_field",
         "max_pages",
@@ -245,7 +258,7 @@ def update_search(
     for key, val in updates.items():
         if key not in allowed:
             continue
-        if key in {"alert_on_new", "enabled"}:
+        if key in {"alert_on_new", "enabled", "include_shippable_out_of_range"}:
             val = 1 if val else 0
         elif isinstance(val, str):
             val = val.strip()

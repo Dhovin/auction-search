@@ -334,6 +334,11 @@ def parse_auction_list_html(html: str, now_utc: Optional[datetime] = None) -> li
             closing_time_raw, tz_title=tz_title, timer_text=countdown, now_utc=now_utc
         )
 
+        shipping_info = ""
+        truck_icon = panel.select_one("i.bi-truck")
+        if truck_icon and truck_icon.get("title"):
+            shipping_info = truck_icon["title"].strip()
+
         sample_images: list[str] = []
         for img in panel.select("ul.light-slider img.auction-img, ul.lightSlider img.auction-img")[:4]:
             src = img.get("src")
@@ -348,6 +353,7 @@ def parse_auction_list_html(html: str, now_utc: Optional[datetime] = None) -> li
                 "affiliate": affiliate,
                 "logo_url": logo_url,
                 "location": location,
+                "shipping_info": shipping_info,
                 "item_count_text": item_count_text,
                 "closing_time_raw": closing_time_raw,
                 "closing_at": closing_at,
@@ -391,11 +397,51 @@ def filter_lot_item(item: dict[str, Any], search_config: dict[str, Any]) -> bool
     return True
 
 
+def has_shipping_available(
+    shipping_info: Optional[str], *, allow_depends: bool = False
+) -> bool:
+    """Return True if an item or auction advertises shipping availability."""
+    text = (shipping_info or "").strip().lower()
+    if not text or "no shipping" in text:
+        return False
+    if "shipping available" in text:
+        return True
+    if allow_depends and "shipping depends" in text:
+        return True
+    return False
+
+
 def _http_headers() -> dict[str, str]:
     return {
         "User-Agent": config.USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+    }
+
+
+def _build_lot_search_params(
+    *,
+    keywords: str,
+    page: int,
+    zip_code: str,
+    distance_radius: int,
+    min_bid: Optional[float],
+    max_bid: Optional[float],
+    auction_id: str,
+    sort_field: str,
+) -> dict[str, str]:
+    return {
+        "lot_list_format": "short",
+        "page": str(page),
+        "auction_id": auction_id or "",
+        "search_phrase_inline": keywords,
+        "affiliate_id": "0",
+        "distance_radius": str(distance_radius),
+        "distance_zip": zip_code or "",
+        "min_bid_amount": str(min_bid) if min_bid is not None else "",
+        "max_bid_amount": str(max_bid) if max_bid is not None else "",
+        "lot_sort_field": sort_field or "close",
+        "search": "Search",
     }
 
 
@@ -408,30 +454,33 @@ async def scrape_search_lots(
     auction_id: str = "",
     sort_field: str = "close",
     max_pages: int = 2,
+    include_shippable_out_of_range: bool = True,
 ) -> list[dict[str, Any]]:
-    """Fetch and parse item search results across 1..max_pages from /auction/search."""
+    """Fetch and parse item search results across 1..max_pages from /auction/search.
+
+    When a ZIP + distance radius is active and ``include_shippable_out_of_range`` is True,
+    a second pass queries all distances and merges any out-of-range lots that offer shipping.
+    """
     all_items: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
+    page_limit = max(1, max_pages)
 
     async with httpx.AsyncClient(
         headers=_http_headers(),
         timeout=config.REQUEST_TIMEOUT_SECONDS,
         follow_redirects=True,
     ) as client:
-        for page in range(1, max(1, max_pages) + 1):
-            params = {
-                "lot_list_format": "short",
-                "page": str(page),
-                "auction_id": auction_id or "",
-                "search_phrase_inline": keywords,
-                "affiliate_id": "0",
-                "distance_radius": str(distance_radius),
-                "distance_zip": zip_code or "",
-                "min_bid_amount": str(min_bid) if min_bid is not None else "",
-                "max_bid_amount": str(max_bid) if max_bid is not None else "",
-                "lot_sort_field": sort_field or "close",
-                "search": "Search",
-            }
+        for page in range(1, page_limit + 1):
+            params = _build_lot_search_params(
+                keywords=keywords,
+                page=page,
+                zip_code=zip_code,
+                distance_radius=distance_radius,
+                min_bid=min_bid,
+                max_bid=max_bid,
+                auction_id=auction_id,
+                sort_field=sort_field,
+            )
             resp = await client.get(f"{config.EQUIPBID_BASE_URL}/auction/search", params=params)
             resp.raise_for_status()
             page_items = parse_lot_search_html(resp.text)
@@ -446,26 +495,96 @@ async def scrape_search_lots(
             if new_on_page == 0 or len(page_items) < 20:
                 break
 
+        has_radius_filter = (
+            distance_radius > 0
+            and bool((zip_code or "").strip())
+            and not (auction_id or "").strip()
+        )
+        if include_shippable_out_of_range and has_radius_filter:
+            seen_shippable_pass: set[str] = set()
+            for page in range(1, page_limit + 1):
+                params = _build_lot_search_params(
+                    keywords=keywords,
+                    page=page,
+                    zip_code="",
+                    distance_radius=-1,
+                    min_bid=min_bid,
+                    max_bid=max_bid,
+                    auction_id=auction_id,
+                    sort_field=sort_field,
+                )
+                resp = await client.get(f"{config.EQUIPBID_BASE_URL}/auction/search", params=params)
+                resp.raise_for_status()
+                page_items = parse_lot_search_html(resp.text)
+                if not page_items:
+                    break
+                new_in_pass = 0
+                for item in page_items:
+                    lot_key = item["lot_key"]
+                    if lot_key not in seen_shippable_pass:
+                        seen_shippable_pass.add(lot_key)
+                        new_in_pass += 1
+                    if lot_key not in seen_keys and has_shipping_available(
+                        item.get("shipping_info")
+                    ):
+                        seen_keys.add(lot_key)
+                        item["out_of_range_shippable"] = True
+                        all_items.append(item)
+                if new_in_pass == 0 or len(page_items) < 20:
+                    break
+
     return all_items
 
 
-async def scrape_live_auctions(
-    zip_code: str = "",
-    distance_radius: int = -1,
-    sort_field: str = "end",
+async def _fetch_auction_list_page(
+    client: httpx.AsyncClient,
+    *,
+    zip_code: str,
+    distance_radius: int,
+    sort_field: str,
 ) -> list[dict[str, Any]]:
-    """Fetch and parse live auctions from /auction/list."""
     params = {
         "sort_field": sort_field if sort_field in {"end", "published"} else "end",
         "affiliate": "0",
         "distance_radius": str(distance_radius),
         "distance_zip": zip_code or "",
     }
+    resp = await client.get(f"{config.EQUIPBID_BASE_URL}/auction/list", params=params)
+    resp.raise_for_status()
+    return parse_auction_list_html(resp.text)
+
+
+async def scrape_live_auctions(
+    zip_code: str = "",
+    distance_radius: int = -1,
+    sort_field: str = "end",
+    include_shippable_out_of_range: bool = True,
+) -> list[dict[str, Any]]:
+    """Fetch and parse live auctions from /auction/list, optionally merging shippable out-of-range sales."""
     async with httpx.AsyncClient(
         headers=_http_headers(),
         timeout=config.REQUEST_TIMEOUT_SECONDS,
         follow_redirects=True,
     ) as client:
-        resp = await client.get(f"{config.EQUIPBID_BASE_URL}/auction/list", params=params)
-        resp.raise_for_status()
-        return parse_auction_list_html(resp.text)
+        auctions = await _fetch_auction_list_page(
+            client,
+            zip_code=zip_code,
+            distance_radius=distance_radius,
+            sort_field=sort_field,
+        )
+        if include_shippable_out_of_range and distance_radius > 0 and bool((zip_code or "").strip()):
+            seen_ids = {a["auction_id"] for a in auctions}
+            all_auctions = await _fetch_auction_list_page(
+                client,
+                zip_code="",
+                distance_radius=-1,
+                sort_field=sort_field,
+            )
+            for auction in all_auctions:
+                if auction["auction_id"] not in seen_ids and has_shipping_available(
+                    auction.get("shipping_info"), allow_depends=True
+                ):
+                    seen_ids.add(auction["auction_id"])
+                    auction["out_of_range_shippable"] = True
+                    auctions.append(auction)
+        return auctions

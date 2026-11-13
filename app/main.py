@@ -145,6 +145,10 @@ async def create_search(payload: SavedSearchCreate) -> dict[str, Any]:
         data["closing_soon_hours"] = (
             float(default_closing) if default_closing and float(default_closing) > 0 else None
         )
+    if "include_shippable_out_of_range" not in payload.model_fields_set:
+        data["include_shippable_out_of_range"] = bool(
+            settings.get("include_shippable_out_of_range", True)
+        )
     run_now = data.pop("run_immediately", False)
     created = database.create_search(data)
     if run_now:
@@ -257,20 +261,27 @@ async def get_live_auctions(
     distance_radius: int = -1,
     sort_field: str = "end",
     use_defaults: bool = True,
+    include_shippable_out_of_range: Optional[bool] = None,
 ) -> list[dict[str, Any]]:
+    settings = database.get_site_settings()
     effective_zip = zip_code.strip()
     effective_distance = distance_radius
     if use_defaults:
-        settings = database.get_site_settings()
         if not effective_zip:
             effective_zip = str(settings.get("default_zip_code") or "").strip()
         if effective_distance == -1:
             effective_distance = int(settings.get("default_distance_radius", -1))
+    effective_shippable = (
+        include_shippable_out_of_range
+        if include_shippable_out_of_range is not None
+        else bool(settings.get("include_shippable_out_of_range", True))
+    )
     try:
         return await scraper.scrape_live_auctions(
             zip_code=effective_zip,
             distance_radius=effective_distance,
             sort_field=sort_field,
+            include_shippable_out_of_range=effective_shippable,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch live auctions: {exc}") from exc
@@ -288,6 +299,7 @@ async def get_live_search(
     auction_id: str = "",
     sort_field: str = "close",
     max_pages: int = Query(default=1, ge=1, le=5),
+    include_shippable_out_of_range: Optional[bool] = None,
 ) -> list[dict[str, Any]]:
     settings = database.get_site_settings()
     effective_zip = zip_code.strip() or str(settings.get("default_zip_code") or "").strip()
@@ -295,6 +307,11 @@ async def get_live_search(
         distance_radius
         if distance_radius != -1
         else int(settings.get("default_distance_radius", -1))
+    )
+    effective_shippable = (
+        include_shippable_out_of_range
+        if include_shippable_out_of_range is not None
+        else bool(settings.get("include_shippable_out_of_range", True))
     )
     combined_exclude = ", ".join(
         part.strip()
@@ -311,6 +328,7 @@ async def get_live_search(
             auction_id=auction_id,
             sort_field=sort_field,
             max_pages=max_pages,
+            include_shippable_out_of_range=effective_shippable,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to search Equip-Bid: {exc}") from exc

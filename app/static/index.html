@@ -75,6 +75,10 @@
           <span>Close Alert (h)</span>
           <input type="number" id="global-closing-hours" min="0" max="168" step="0.5" value="4" />
         </label>
+        <label class="checkbox-row inline-checkbox">
+          <input type="checkbox" id="global-include-shippable" checked />
+          <span>+ Out-of-Range w/ Shipping</span>
+        </label>
         <button type="submit" id="btn-save-global-settings" class="btn btn-primary btn-sm">Save Defaults</button>
       </div>
     </form>
@@ -176,6 +180,10 @@
             <option value="end">Closing Soonest</option>
             <option value="published">Newest Published</option>
           </select>
+          <label class="checkbox-row">
+            <input type="checkbox" id="auctions-include-shippable" checked />
+            <span>Include out-of-range w/ shipping</span>
+          </label>
           <button type="submit" class="btn btn-primary">Fetch Live Auctions</button>
         </div>
       </form>
@@ -346,6 +354,10 @@
             <input type="number" id="search-closing-hours" min="0.5" max="168" step="0.5" value="4" placeholder="Leave blank to disable" />
           </div>
           <div class="form-group checkbox-col">
+            <label class="checkbox-row">
+              <input type="checkbox" id="search-include-shippable" checked />
+              <span>Include items outside distance radius if shipping is available</span>
+            </label>
             <label class="checkbox-row">
               <input type="checkbox" id="search-alert-new" checked />
               <span>Alert on new matching items</span>

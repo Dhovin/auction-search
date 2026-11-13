@@ -14,6 +14,7 @@ const state = {
     global_exclude_words: "",
     default_check_interval_minutes: 30,
     default_closing_soon_hours: 4,
+    include_shippable_out_of_range: true,
   },
 };
 
@@ -336,19 +337,25 @@ function renderSiteSettings() {
   const excEl = document.getElementById("global-exclude");
   const intEl = document.getElementById("global-interval");
   const closeEl = document.getElementById("global-closing-hours");
+  const shipEl = document.getElementById("global-include-shippable");
   if (zipEl) zipEl.value = s.default_zip_code || "";
   if (distEl) distEl.value = String(s.default_distance_radius ?? -1);
   if (excEl) excEl.value = s.global_exclude_words || "";
   if (intEl) intEl.value = s.default_check_interval_minutes ?? 30;
   if (closeEl) closeEl.value = s.default_closing_soon_hours ?? 4;
+  if (shipEl) shipEl.checked = s.include_shippable_out_of_range !== false;
 
   const aucZipEl = document.getElementById("auctions-zip");
   const aucDistEl = document.getElementById("auctions-distance");
+  const aucShipEl = document.getElementById("auctions-include-shippable");
   if (aucZipEl && !aucZipEl.dataset.touched && !aucZipEl.value) {
     aucZipEl.value = s.default_zip_code || "";
   }
   if (aucDistEl && !aucDistEl.dataset.touched) {
     aucDistEl.value = String(s.default_distance_radius ?? -1);
+  }
+  if (aucShipEl && !aucShipEl.dataset.touched) {
+    aucShipEl.checked = s.include_shippable_out_of_range !== false;
   }
 }
 
@@ -365,6 +372,7 @@ async function saveSiteSettings() {
     global_exclude_words: document.getElementById("global-exclude").value.trim(),
     default_check_interval_minutes: Number(document.getElementById("global-interval").value || 30),
     default_closing_soon_hours: closingRaw === "" ? 0 : Number(closingRaw),
+    include_shippable_out_of_range: document.getElementById("global-include-shippable").checked,
   };
   state.settings = await api("/api/settings", {
     method: "PUT",
@@ -372,8 +380,10 @@ async function saveSiteSettings() {
   });
   const aucZipEl = document.getElementById("auctions-zip");
   const aucDistEl = document.getElementById("auctions-distance");
+  const aucShipEl = document.getElementById("auctions-include-shippable");
   if (aucZipEl && !aucZipEl.dataset.touched) aucZipEl.value = state.settings.default_zip_code || "";
   if (aucDistEl && !aucDistEl.dataset.touched) aucDistEl.value = String(state.settings.default_distance_radius ?? -1);
+  if (aucShipEl && !aucShipEl.dataset.touched) aucShipEl.checked = state.settings.include_shippable_out_of_range !== false;
   renderSiteSettings();
   renderSearches();
   toast("Site-wide defaults saved", "ok");
@@ -444,11 +454,14 @@ function renderItems() {
         ? `<img class="lot-thumb" src="${esc(item.image_url)}" alt="${esc(item.title)}" loading="lazy" />`
         : `<div class="lot-thumb-placeholder">No Image</div>`;
 
+      const hasShipping = (item.shipping_info || "").toLowerCase().includes("shipping available");
       const badgesHtml = isLive
         ? `<span class="pill unread">LIVE EQUIP-BID RESULT</span>
+           ${hasShipping ? '<span class="pill ok">SHIPPING AVAILABLE</span>' : ""}
            ${isClosingSoon ? '<span class="pill warn">CLOSING SOON</span>' : ""}`
         : `${!item.is_read ? '<span class="pill unread">NEW</span>' : ""}
            ${item.is_watched ? '<span class="pill ok">WATCHED</span>' : ""}
+           ${hasShipping ? '<span class="pill ok">SHIPPING AVAILABLE</span>' : ""}
            ${isClosingSoon ? '<span class="pill warn">CLOSING SOON</span>' : ""}
            ${isEnded ? '<span class="pill danger">ENDED</span>' : ""}
            ${item.search_name ? `<span class="pill">${esc(item.search_name)}</span>` : ""}`;
@@ -508,14 +521,15 @@ function renderSearches() {
       const defZip = (state.settings.default_zip_code || "").trim();
       const defDist = Number(state.settings.default_distance_radius ?? -1);
       const effDist = s.distance_radius > 0 ? s.distance_radius : defDist;
-      const distLabel = effDist > 0 ? `${effDist} mi` : "Any distance";
+      const shipSuffix = effDist > 0 && s.include_shippable_out_of_range !== false ? " + Shipping" : "";
+      const distLabel = effDist > 0 ? `${effDist} mi${shipSuffix}` : "Any distance";
       let locText = "All locations";
       if (s.zip_code) {
         locText = `${esc(s.zip_code)} (${distLabel})`;
       } else if (defZip) {
         locText = `Site default: ${esc(defZip)} (${distLabel})`;
       } else if (effDist > 0) {
-        locText = `Site default distance (${effDist} mi)`;
+        locText = `Site default distance (${effDist} mi${shipSuffix})`;
       }
       const bidLimits = [];
       if (s.min_bid != null) bidLimits.push(`Min $${s.min_bid}`);
@@ -576,6 +590,9 @@ function renderAuctions() {
               <h3><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a></h3>
               <span class="pill ok">${esc(a.status)}</span>
               ${a.item_count_text ? `<span class="pill">${esc(a.item_count_text)}</span>` : ""}
+              ${(a.shipping_info || "").toLowerCase().includes("shipping available")
+                ? `<span class="pill ok">${esc(a.shipping_info)}</span>`
+                : (a.shipping_info ? `<span class="pill">${esc(a.shipping_info)}</span>` : "")}
               <span class="pill">ID: ${esc(a.auction_id)}</span>
             </div>
             <p class="muted">
@@ -698,6 +715,9 @@ function openSearchModal(existing = null, prefill = {}) {
   const newClosingVal = defClosing && Number(defClosing) > 0 ? String(defClosing) : "";
   document.getElementById("search-closing-hours").value =
     existing ? (existing.closing_soon_hours != null ? existing.closing_soon_hours : "") : newClosingVal;
+  document.getElementById("search-include-shippable").checked = existing
+    ? existing.include_shippable_out_of_range !== false
+    : settings.include_shippable_out_of_range !== false;
   document.getElementById("search-alert-new").checked = existing ? existing.alert_on_new : true;
   document.getElementById("search-enabled").checked = existing ? existing.enabled : true;
 
@@ -730,6 +750,7 @@ function readSearchFormPayload() {
     max_bid: maxVal === "" ? null : Number(maxVal),
     zip_code: document.getElementById("search-zip").value.trim(),
     distance_radius: Number(document.getElementById("search-distance").value),
+    include_shippable_out_of_range: document.getElementById("search-include-shippable").checked,
     auction_id: document.getElementById("search-auction-id").value.trim(),
     sort_field: document.getElementById("search-sort").value,
     check_interval_minutes: Number(document.getElementById("search-interval").value || 30),
@@ -956,6 +977,9 @@ function initEvents() {
   document.getElementById("auctions-distance").addEventListener("change", (e) => {
     e.target.dataset.touched = "1";
   });
+  document.getElementById("auctions-include-shippable").addEventListener("change", (e) => {
+    e.target.dataset.touched = "1";
+  });
 
   // Inline platform selector pills & channel form
   document.getElementById("inline-platform-pills").addEventListener("click", (e) => {
@@ -1089,6 +1113,7 @@ function initEvents() {
         exclude_words: payload.exclude_words,
         zip_code: payload.zip_code,
         distance_radius: String(payload.distance_radius),
+        include_shippable_out_of_range: String(payload.include_shippable_out_of_range),
         auction_id: payload.auction_id,
         sort_field: payload.sort_field,
         max_pages: "1",
@@ -1183,6 +1208,7 @@ function initEvents() {
         distance_radius: document.getElementById("auctions-distance").value,
         sort_field: document.getElementById("auctions-sort").value,
         use_defaults: "false",
+        include_shippable_out_of_range: String(document.getElementById("auctions-include-shippable").checked),
       });
       state.auctions = await api(`/api/live-auctions?${qs.toString()}`);
       renderAuctions();

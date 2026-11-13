@@ -161,6 +161,7 @@ def test_site_settings_and_search_defaults(monkeypatch, tmp_path):
         defaults = client.get("/api/settings").json()
         assert defaults["default_zip_code"] == ""
         assert defaults["default_distance_radius"] == -1
+        assert defaults["include_shippable_out_of_range"] is True
 
         updated = client.put(
             "/api/settings",
@@ -170,11 +171,13 @@ def test_site_settings_and_search_defaults(monkeypatch, tmp_path):
                 "global_exclude_words": "damaged",
                 "default_check_interval_minutes": 15,
                 "default_closing_soon_hours": 6.0,
+                "include_shippable_out_of_range": False,
             },
         ).json()
         assert updated["default_zip_code"] == "64108"
         assert updated["default_distance_radius"] == 50
         assert updated["global_exclude_words"] == "damaged"
+        assert updated["include_shippable_out_of_range"] is False
 
         created = client.post(
             "/api/searches",
@@ -186,14 +189,18 @@ def test_site_settings_and_search_defaults(monkeypatch, tmp_path):
         ).json()
         assert created["check_interval_minutes"] == 15
         assert created["closing_soon_hours"] == 6.0
+        assert created["include_shippable_out_of_range"] is False
         assert created["last_run_result"]["matched"] == 1
         assert captured_lot_calls[-1]["zip_code"] == "64108"
         assert captured_lot_calls[-1]["distance_radius"] == 50
+        assert captured_lot_calls[-1]["include_shippable_out_of_range"] is False
 
         client.get("/api/live-auctions")
         assert captured_auction_calls[-1]["zip_code"] == "64108"
         assert captured_auction_calls[-1]["distance_radius"] == 50
+        assert captured_auction_calls[-1]["include_shippable_out_of_range"] is False
 
-        client.get("/api/live-auctions?use_defaults=false")
+        client.get("/api/live-auctions?use_defaults=false&include_shippable_out_of_range=true")
         assert captured_auction_calls[-1]["zip_code"] == ""
         assert captured_auction_calls[-1]["distance_radius"] == -1
+        assert captured_auction_calls[-1]["include_shippable_out_of_range"] is True

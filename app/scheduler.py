@@ -52,10 +52,12 @@ async def execute_saved_search(
         for part in (search.get("exclude_words", ""), settings.get("global_exclude_words", ""))
         if part and str(part).strip()
     )
+    include_shippable = bool(search.get("include_shippable_out_of_range", True))
     effective_search = dict(search)
     effective_search["zip_code"] = effective_zip
     effective_search["distance_radius"] = effective_distance
     effective_search["exclude_words"] = combined_exclude
+    effective_search["include_shippable_out_of_range"] = include_shippable
 
     raw_items = await scraper.scrape_search_lots(
         keywords=search["keywords"],
@@ -66,6 +68,7 @@ async def execute_saved_search(
         auction_id=search.get("auction_id", ""),
         sort_field=search.get("sort_field", "close"),
         max_pages=int(search.get("max_pages", 2)),
+        include_shippable_out_of_range=include_shippable,
     )
 
     matched = [item for item in raw_items if scraper.filter_lot_item(item, effective_search)]

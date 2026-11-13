@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 
+import pytest
+
 from app import scraper
 
 SAMPLE_SEARCH_HTML = """
@@ -165,3 +167,113 @@ def test_parse_auction_list_html():
     # 11/13/2026 06:15 pm -06:00 == 2026-11-14T00:15:00Z
     assert auc["closing_at"] == "2026-11-14T00:15:00Z"
     assert auc["sample_images"] == ["https://www.equip-bid.com/img/2.jpg"]
+    assert auc["shipping_info"] == ""
+
+
+def test_has_shipping_available():
+    assert scraper.has_shipping_available("Shipping Available") is True
+    assert scraper.has_shipping_available("shipping available") is True
+    assert scraper.has_shipping_available("No Shipping") is False
+    assert scraper.has_shipping_available("") is False
+    assert scraper.has_shipping_available("Shipping Depends Upon Item") is False
+    assert scraper.has_shipping_available("Shipping Depends Upon Item", allow_depends=True) is True
+
+
+@pytest.mark.asyncio
+async def test_scrape_search_lots_includes_shippable_out_of_range(monkeypatch):
+    in_range_html = """
+    <div class="lot-list">
+      <div class="row">
+        <div class="col-xs-10">
+          <h4 id="itemTitle1"><a href="/auction/100/item/1"><strong>Local Tool (Pickup Only)</strong></a></h4>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-xs-12 col-sm-5"><span class="lot-current-bid">$20.00</span></div>
+        <div class="col-xs-12 col-sm-3"><div class="auction-listing-timer"><i class="bi-truck cross-through" title="No Shipping"></i></div></div>
+      </div>
+    </div>
+    """
+    all_distance_html = """
+    <div class="lot-list">
+      <div class="row">
+        <div class="col-xs-10">
+          <h4 id="itemTitle1"><a href="/auction/100/item/1"><strong>Local Tool (Pickup Only)</strong></a></h4>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-xs-12 col-sm-5"><span class="lot-current-bid">$20.00</span></div>
+        <div class="col-xs-12 col-sm-3"><div class="auction-listing-timer"><i class="bi-truck cross-through" title="No Shipping"></i></div></div>
+      </div>
+      <div class="hidden-xs hidden-sm" style="border-top: 1px solid #e2e2e2;"></div>
+      <div class="row">
+        <div class="col-xs-10">
+          <h4 id="itemTitle2"><a href="/auction/200/item/2"><strong>Remote Shippable Drill</strong></a></h4>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-xs-12 col-sm-5"><span class="lot-current-bid">$35.00</span></div>
+        <div class="col-xs-12 col-sm-3"><div class="auction-listing-timer"><i class="bi-truck" title="Shipping Available"></i></div></div>
+      </div>
+      <div class="hidden-xs hidden-sm" style="border-top: 1px solid #e2e2e2;"></div>
+      <div class="row">
+        <div class="col-xs-10">
+          <h4 id="itemTitle3"><a href="/auction/300/item/3"><strong>Remote Local-Only Saw</strong></a></h4>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-xs-12 col-sm-5"><span class="lot-current-bid">$40.00</span></div>
+        <div class="col-xs-12 col-sm-3"><div class="auction-listing-timer"><i class="bi-truck cross-through" title="No Shipping"></i></div></div>
+      </div>
+    </div>
+    """
+
+    class FakeResp:
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        calls = []
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, params=None):
+            FakeClient.calls.append(dict(params or {}))
+            if str((params or {}).get("distance_radius")) == "50":
+                return FakeResp(in_range_html)
+            return FakeResp(all_distance_html)
+
+    monkeypatch.setattr("app.scraper.httpx.AsyncClient", FakeClient)
+
+    items = await scraper.scrape_search_lots(
+        keywords="tool",
+        zip_code="64108",
+        distance_radius=50,
+        max_pages=1,
+        include_shippable_out_of_range=True,
+    )
+    assert [i["lot_key"] for i in items] == ["100:1", "200:2"]
+    assert items[1]["shipping_info"] == "Shipping Available"
+    assert items[1]["out_of_range_shippable"] is True
+    assert len(FakeClient.calls) == 2
+
+    FakeClient.calls.clear()
+    items_local_only = await scraper.scrape_search_lots(
+        keywords="tool",
+        zip_code="64108",
+        distance_radius=50,
+        max_pages=1,
+        include_shippable_out_of_range=False,
+    )
+    assert [i["lot_key"] for i in items_local_only] == ["100:1"]
+    assert len(FakeClient.calls) == 1

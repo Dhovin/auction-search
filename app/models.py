@@ -28,6 +28,7 @@ class SavedSearchCreate(BaseModel):
     max_bid: Optional[float] = Field(default=None, ge=0)
     zip_code: str = Field(default="", max_length=10)
     distance_radius: int = -1
+    include_shippable_out_of_range: bool = True
     auction_id: str = Field(default="", max_length=32)
     sort_field: str = "close"
     max_pages: int = Field(default=2, ge=1, le=10)
@@ -61,6 +62,7 @@ class SavedSearchUpdate(BaseModel):
     max_bid: Optional[float] = Field(default=None, ge=0)
     zip_code: Optional[str] = Field(default=None, max_length=10)
     distance_radius: Optional[int] = None
+    include_shippable_out_of_range: Optional[bool] = None
     auction_id: Optional[str] = Field(default=None, max_length=32)
     sort_field: Optional[str] = None
     max_pages: Optional[int] = Field(default=None, ge=1, le=10)
@@ -108,6 +110,7 @@ class SiteSettingsUpdate(BaseModel):
     global_exclude_words: Optional[str] = Field(default=None, max_length=500)
     default_check_interval_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     default_closing_soon_hours: Optional[float] = Field(default=None, ge=0, le=168)
+    include_shippable_out_of_range: Optional[bool] = None
 
     @field_validator("default_zip_code")
     @classmethod
