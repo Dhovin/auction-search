@@ -416,7 +416,7 @@ function renderAuctions() {
 function renderChannels() {
   const list = document.getElementById("channels-list");
   if (!state.channels.length) {
-    list.innerHTML = `<div class="empty-state">No external notification channels configured. Alerts still appear in the Matched Items dashboard.</div>`;
+    list.innerHTML = `<div class="empty-state">No external alert channels saved yet. Use the form above to set up Email (SMTP), Discord, Slack, Telegram, Pushover, ntfy, Gotify, or a Webhook.</div>`;
     return;
   }
 
@@ -434,6 +434,9 @@ function renderChannels() {
         <div class="row-card-actions">
           <button class="btn btn-primary btn-sm" data-channel-test="${c.id}">Send Test Alert</button>
           <button class="btn btn-secondary btn-sm" data-channel-edit="${c.id}">Edit</button>
+          <button class="btn btn-secondary btn-sm" data-channel-toggle="${c.id}" data-enabled="${!c.enabled}">
+            ${c.enabled ? "Disable" : "Enable"}
+          </button>
           <button class="btn btn-danger btn-sm" data-channel-delete="${c.id}">Delete</button>
         </div>
       </div>
@@ -499,6 +502,15 @@ function openSearchModal(existing = null, prefill = {}) {
   runWrap.style.display = existing ? "none" : "flex";
   document.getElementById("preview-box").classList.add("hidden");
   document.getElementById("preview-results").innerHTML = "";
+
+  const activeChannels = state.channels.filter((c) => c.enabled);
+  const summaryEl = document.getElementById("search-modal-channels-summary");
+  if (summaryEl) {
+    summaryEl.textContent = activeChannels.length
+      ? `Active alert platforms: ${activeChannels.map((c) => `${c.name} (${c.channel_type})`).join(", ")}`
+      : "No Email or external platforms configured yet (alerts show in web dashboard only).";
+  }
+
   openModal("search-modal");
 }
 
@@ -527,11 +539,12 @@ function readSearchFormPayload() {
 }
 
 // ---------------------------------------------------------------------------
-// Channel Modal Dynamic Fields
+// Channel Inline & Modal Dynamic Fields
 // ---------------------------------------------------------------------------
 
-function renderChannelFields(type, existingConfig = {}) {
-  const container = document.getElementById("channel-dynamic-fields");
+function renderChannelFields(type, existingConfig = {}, containerId = "inline-channel-dynamic-fields") {
+  const container = document.getElementById(containerId);
+  if (!container) return;
   const fields = CHANNEL_SCHEMAS[type] || [];
   container.innerHTML = fields
     .map((f) => {
@@ -556,22 +569,11 @@ function renderChannelFields(type, existingConfig = {}) {
     .join("");
 }
 
-function openChannelModal(existing = null) {
-  document.getElementById("channel-modal-title").textContent = existing ? "Edit Notification Channel" : "Add Notification Channel";
-  document.getElementById("channel-id").value = existing ? existing.id : "";
-  document.getElementById("channel-name").value = existing ? existing.name : "";
-  const typeSelect = document.getElementById("channel-type");
-  typeSelect.value = existing ? existing.channel_type : "discord";
-  document.getElementById("channel-enabled").checked = existing ? existing.enabled : true;
-  renderChannelFields(typeSelect.value, existing ? existing.config : {});
-  openModal("channel-modal");
-}
-
-function readChannelConfigFromForm(type) {
+function readChannelConfigFromForm(type, containerSelector = "#inline-channel-dynamic-fields") {
   const cfg = {};
   const fields = CHANNEL_SCHEMAS[type] || [];
   fields.forEach((f) => {
-    const el = document.querySelector(`#channel-dynamic-fields [data-cfg-key="${f.key}"]`);
+    const el = document.querySelector(`${containerSelector} [data-cfg-key="${f.key}"]`);
     if (!el) return;
     if (f.type === "checkbox") {
       cfg[f.key] = el.checked;
@@ -589,6 +591,96 @@ function readChannelConfigFromForm(type) {
   return cfg;
 }
 
+function setInlinePlatform(type, existingConfig = {}) {
+  document.getElementById("inline-channel-type").value = type;
+  document.querySelectorAll("#inline-platform-pills .platform-pill").forEach((pill) => {
+    pill.classList.toggle("active", pill.dataset.platform === type);
+  });
+  const nameInput = document.getElementById("inline-channel-name");
+  if (!document.getElementById("inline-channel-id").value && !nameInput.dataset.touched) {
+    const labelMap = {
+      email: "Email Alerts",
+      discord: "Discord Alerts",
+      slack: "Slack Alerts",
+      telegram: "Telegram Alerts",
+      pushover: "Pushover Alerts",
+      ntfy: "ntfy Push Alerts",
+      gotify: "Gotify Alerts",
+      webhook: "Custom Webhook",
+    };
+    nameInput.placeholder = `e.g. ${labelMap[type] || "My Alert Channel"}`;
+  }
+  renderChannelFields(type, existingConfig, "inline-channel-dynamic-fields");
+}
+
+function resetInlineChannelForm() {
+  document.getElementById("inline-channel-id").value = "";
+  const nameInput = document.getElementById("inline-channel-name");
+  nameInput.value = "";
+  delete nameInput.dataset.touched;
+  document.getElementById("inline-channel-enabled").checked = true;
+  document.getElementById("btn-inline-save-channel").textContent = "Save Channel";
+  document.getElementById("btn-inline-reset-channel").classList.add("hidden");
+  setInlinePlatform("email", {});
+}
+
+function editChannelInline(ch) {
+  document.getElementById("inline-channel-id").value = ch.id;
+  const nameInput = document.getElementById("inline-channel-name");
+  nameInput.value = ch.name;
+  nameInput.dataset.touched = "1";
+  document.getElementById("inline-channel-enabled").checked = ch.enabled;
+  document.getElementById("btn-inline-save-channel").textContent = "Update Channel";
+  document.getElementById("btn-inline-reset-channel").classList.remove("hidden");
+  setInlinePlatform(ch.channel_type, ch.config || {});
+  document.getElementById("inline-channel-card").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function saveInlineChannel(andTest = false) {
+  const id = document.getElementById("inline-channel-id").value;
+  const type = document.getElementById("inline-channel-type").value;
+  const name = document.getElementById("inline-channel-name").value.trim();
+  if (!name) {
+    toast("Please enter a Channel Label (e.g. Personal Email)", "error");
+    document.getElementById("inline-channel-name").focus();
+    return;
+  }
+  const config = readChannelConfigFromForm(type, "#inline-channel-dynamic-fields");
+  const payload = {
+    name,
+    channel_type: type,
+    config,
+    enabled: document.getElementById("inline-channel-enabled").checked,
+  };
+  let saved;
+  if (id) {
+    saved = await api(`/api/channels/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+    toast("Alert channel updated", "ok");
+  } else {
+    saved = await api("/api/channels", { method: "POST", body: JSON.stringify(payload) });
+    toast("Alert channel saved", "ok");
+  }
+  resetInlineChannelForm();
+  await Promise.all([loadChannels(), refreshStats()]);
+  if (andTest && saved && saved.id) {
+    await api(`/api/channels/${saved.id}/test`, { method: "POST" });
+    toast(`Test notification delivered via ${saved.name}!`, "ok");
+  }
+}
+
+async function switchTab(target) {
+  document.querySelectorAll(".tab-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tab === target);
+  });
+  document.querySelectorAll(".tab-panel").forEach((p) => {
+    p.classList.toggle("active", p.id === `tab-${target}`);
+  });
+  if (target === "alerts") await loadAlerts();
+  if (target === "auctions" && !state.auctions.length) {
+    document.getElementById("live-auctions-form").dispatchEvent(new Event("submit"));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Event Wiring
 // ---------------------------------------------------------------------------
@@ -596,17 +688,7 @@ function readChannelConfigFromForm(type) {
 function initEvents() {
   // Tabs
   document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
-      btn.classList.add("active");
-      const target = btn.dataset.tab;
-      document.getElementById(`tab-${target}`).classList.add("active");
-      if (target === "alerts") await loadAlerts();
-      if (target === "auctions" && !state.auctions.length) {
-        document.getElementById("live-auctions-form").dispatchEvent(new Event("submit"));
-      }
-    });
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
   });
 
   // Modal close buttons
@@ -615,13 +697,46 @@ function initEvents() {
   });
 
   document.getElementById("btn-new-search-top").addEventListener("click", () => openSearchModal());
+  document.getElementById("btn-open-alerts-settings").addEventListener("click", () => switchTab("channels"));
+  document.getElementById("btn-alerts-tab-configure").addEventListener("click", () => switchTab("channels"));
+  document.getElementById("btn-modal-go-channels").addEventListener("click", () => {
+    closeModal("search-modal");
+    switchTab("channels");
+  });
   document.getElementById("btn-add-search").addEventListener("click", () => openSearchModal());
-  document.getElementById("btn-add-channel").addEventListener("click", () => openChannelModal());
   document.getElementById("btn-refresh-alerts").addEventListener("click", () => loadAlerts());
 
-  document.getElementById("channel-type").addEventListener("change", (e) => {
-    renderChannelFields(e.target.value, {});
+  // Inline platform selector pills & channel form
+  document.getElementById("inline-platform-pills").addEventListener("click", (e) => {
+    const pill = e.target.closest("[data-platform]");
+    if (!pill) return;
+    setInlinePlatform(pill.dataset.platform, {});
   });
+  document.getElementById("inline-channel-name").addEventListener("input", (e) => {
+    e.target.dataset.touched = "1";
+  });
+  document.getElementById("inline-channel-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await saveInlineChannel(false);
+    } catch (err) {
+      toast(`Failed to save alert channel: ${err.message}`, "error");
+    }
+  });
+  document.getElementById("btn-inline-save-test").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Testing...";
+    try {
+      await saveInlineChannel(true);
+    } catch (err) {
+      toast(`Test failed: ${err.message}`, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Save & Send Test Alert";
+    }
+  });
+  document.getElementById("btn-inline-reset-channel").addEventListener("click", () => resetInlineChannelForm());
 
   // Item filters
   ["filter-search-id", "filter-sort", "filter-unread", "filter-watched", "filter-closing"].forEach((id) => {
@@ -833,37 +948,11 @@ function initEvents() {
     });
   });
 
-  // Channel form save
-  document.getElementById("channel-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const id = document.getElementById("channel-id").value;
-    const type = document.getElementById("channel-type").value;
-    try {
-      const config = readChannelConfigFromForm(type);
-      const payload = {
-        name: document.getElementById("channel-name").value.trim(),
-        channel_type: type,
-        config,
-        enabled: document.getElementById("channel-enabled").checked,
-      };
-      if (id) {
-        await api(`/api/channels/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-        toast("Notification channel updated", "ok");
-      } else {
-        await api("/api/channels", { method: "POST", body: JSON.stringify(payload) });
-        toast("Notification channel added", "ok");
-      }
-      closeModal("channel-modal");
-      await Promise.all([loadChannels(), refreshStats()]);
-    } catch (err) {
-      toast(`Channel save failed: ${err.message}`, "error");
-    }
-  });
-
   // Channel list actions
   document.getElementById("channels-list").addEventListener("click", async (e) => {
     const testBtn = e.target.closest("[data-channel-test]");
     const editBtn = e.target.closest("[data-channel-edit]");
+    const toggleBtn = e.target.closest("[data-channel-toggle]");
     const delBtn = e.target.closest("[data-channel-delete]");
     try {
       if (testBtn) {
@@ -875,7 +964,14 @@ function initEvents() {
         testBtn.textContent = "Send Test Alert";
       } else if (editBtn) {
         const ch = state.channels.find((x) => x.id === Number(editBtn.dataset.channelEdit));
-        if (ch) openChannelModal(ch);
+        if (ch) editChannelInline(ch);
+      } else if (toggleBtn) {
+        const enabled = toggleBtn.dataset.enabled === "true";
+        await api(`/api/channels/${toggleBtn.dataset.channelToggle}`, {
+          method: "PUT",
+          body: JSON.stringify({ enabled }),
+        });
+        await Promise.all([loadChannels(), refreshStats()]);
       } else if (delBtn) {
         await api(`/api/channels/${delBtn.dataset.channelDelete}`, { method: "DELETE" });
         toast("Channel deleted", "info");
@@ -893,6 +989,7 @@ function initEvents() {
 
 async function bootstrap() {
   initEvents();
+  setInlinePlatform("email", {});
   await Promise.all([refreshStats(), loadSearches(), loadItems(), loadChannels()]);
   setInterval(() => {
     refreshStats();

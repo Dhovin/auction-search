@@ -24,11 +24,12 @@
         </button>
         <button class="tab-btn" data-tab="searches">Saved Searches</button>
         <button class="tab-btn" data-tab="auctions">Live Auctions</button>
-        <button class="tab-btn" data-tab="channels">Notification Channels</button>
+        <button class="tab-btn" data-tab="channels">Alert Settings (Email / Push)</button>
         <button class="tab-btn" data-tab="alerts">Alert History</button>
       </nav>
 
       <div class="topbar-actions">
+        <button class="btn btn-secondary" id="btn-open-alerts-settings">Configure Alerts</button>
         <button class="btn btn-primary" id="btn-new-search-top">+ New Search</button>
       </div>
     </div>
@@ -142,15 +143,55 @@
       <div id="live-auctions-list" class="cards-stack"></div>
     </section>
 
-    <!-- TAB 4: NOTIFICATION CHANNELS -->
+    <!-- TAB 4: ALERT SETTINGS (EMAIL / PUSH / WEBHOOKS) -->
     <section id="tab-channels" class="tab-panel">
       <div class="panel-header">
         <div>
-          <h2>Notification Channels</h2>
-          <p class="muted">Alerts always appear in the web dashboard. Configure any external channels below.</p>
+          <h2>Alert Settings (Email, Push &amp; Webhooks)</h2>
+          <p class="muted">Alerts always appear in the web dashboard. Select any platform below to configure Email (SMTP), Discord, Slack, Telegram, Pushover, ntfy, Gotify, or custom webhook notifications.</p>
         </div>
-        <button class="btn btn-primary" id="btn-add-channel">+ Add Channel</button>
       </div>
+
+      <div id="inline-channel-card" class="setup-card">
+        <div class="platform-pills" id="inline-platform-pills" role="tablist" aria-label="Notification Platforms">
+          <button type="button" class="platform-pill active" data-platform="email">Email (SMTP)</button>
+          <button type="button" class="platform-pill" data-platform="discord">Discord Webhook</button>
+          <button type="button" class="platform-pill" data-platform="slack">Slack Webhook</button>
+          <button type="button" class="platform-pill" data-platform="telegram">Telegram Bot</button>
+          <button type="button" class="platform-pill" data-platform="pushover">Pushover</button>
+          <button type="button" class="platform-pill" data-platform="ntfy">ntfy Push</button>
+          <button type="button" class="platform-pill" data-platform="gotify">Gotify Push</button>
+          <button type="button" class="platform-pill" data-platform="webhook">Custom Webhook</button>
+        </div>
+
+        <form id="inline-channel-form" class="setup-form">
+          <input type="hidden" id="inline-channel-id" />
+          <input type="hidden" id="inline-channel-type" value="email" />
+
+          <div class="form-grid" style="margin-bottom:12px;">
+            <div class="form-group">
+              <label for="inline-channel-name">Channel Label *</label>
+              <input type="text" id="inline-channel-name" required placeholder="e.g. Personal Email Alerts" />
+            </div>
+            <div class="form-group checkbox-col">
+              <label class="checkbox-row">
+                <input type="checkbox" id="inline-channel-enabled" checked />
+                <span>Channel enabled</span>
+              </label>
+            </div>
+          </div>
+
+          <div id="inline-channel-dynamic-fields" class="dynamic-fields"></div>
+
+          <div class="form-actions-row" style="margin-top:14px;">
+            <button type="submit" class="btn btn-primary" id="btn-inline-save-channel">Save Channel</button>
+            <button type="button" class="btn btn-secondary" id="btn-inline-save-test">Save &amp; Send Test Alert</button>
+            <button type="button" class="btn btn-ghost hidden" id="btn-inline-reset-channel">Cancel Edit / New Channel</button>
+          </div>
+        </form>
+      </div>
+
+      <h3 class="section-heading">Configured Alert Channels</h3>
       <div id="channels-list" class="cards-stack"></div>
     </section>
 
@@ -161,7 +202,10 @@
           <h2>Alert History</h2>
           <p class="muted">Recent new-match, closing-soon, and test notifications.</p>
         </div>
-        <button class="btn btn-secondary" id="btn-refresh-alerts">Refresh</button>
+        <div class="toolbar-actions">
+          <button class="btn btn-primary" id="btn-alerts-tab-configure">Configure Email &amp; Platform Alerts</button>
+          <button class="btn btn-secondary" id="btn-refresh-alerts">Refresh</button>
+        </div>
       </div>
       <div class="table-wrap">
         <table class="data-table">
@@ -274,6 +318,11 @@
           </div>
         </div>
 
+        <div class="channel-banner">
+          <span id="search-modal-channels-summary" class="muted">Loading alert destinations...</span>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-modal-go-channels">Configure Email / Platform Alerts &rarr;</button>
+        </div>
+
         <div id="preview-box" class="preview-box hidden">
           <div class="preview-header">
             <strong id="preview-title">Live Preview Results</strong>
@@ -286,50 +335,6 @@
           <div class="spacer"></div>
           <button type="button" class="btn btn-ghost" data-close="search-modal">Cancel</button>
           <button type="submit" class="btn btn-primary">Save Search</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- MODAL: CREATE / EDIT NOTIFICATION CHANNEL -->
-  <div id="channel-modal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-backdrop" data-close="channel-modal"></div>
-    <div class="modal-card">
-      <div class="modal-header">
-        <h3 id="channel-modal-title">Add Notification Channel</h3>
-        <button class="icon-btn" data-close="channel-modal" aria-label="Close">&times;</button>
-      </div>
-      <form id="channel-form" class="modal-body">
-        <input type="hidden" id="channel-id" />
-        <div class="form-group">
-          <label for="channel-name">Channel Name *</label>
-          <input type="text" id="channel-name" required placeholder="e.g. Personal Discord / Gmail / ntfy" />
-        </div>
-        <div class="form-group">
-          <label for="channel-type">Channel Type *</label>
-          <select id="channel-type" required>
-            <option value="discord">Discord Webhook</option>
-            <option value="slack">Slack Webhook</option>
-            <option value="email">Email (SMTP)</option>
-            <option value="ntfy">ntfy Push</option>
-            <option value="gotify">Gotify Push</option>
-            <option value="pushover">Pushover</option>
-            <option value="telegram">Telegram Bot</option>
-            <option value="webhook">Custom JSON Webhook</option>
-          </select>
-        </div>
-
-        <div id="channel-dynamic-fields" class="dynamic-fields"></div>
-
-        <label class="checkbox-row">
-          <input type="checkbox" id="channel-enabled" checked />
-          <span>Channel enabled</span>
-        </label>
-
-        <div class="modal-footer">
-          <div class="spacer"></div>
-          <button type="button" class="btn btn-ghost" data-close="channel-modal">Cancel</button>
-          <button type="submit" class="btn btn-primary">Save Channel</button>
         </div>
       </form>
     </div>
