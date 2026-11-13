@@ -1415,6 +1415,11 @@ async function bootstrap() {
   await Promise.all([refreshStats(), loadSearches(), loadItems(), loadChannels()]);
   setInterval(() => {
     refreshStats();
+    const itemsTabActive = document.getElementById("tab-items")?.classList.contains("active");
+    const hasOpenModal = Boolean(document.querySelector(".modal:not(.hidden)"));
+    if (itemsTabActive && !state.isLiveMode && !hasOpenModal) {
+      loadItems();
+    }
   }, 30000);
 }
 

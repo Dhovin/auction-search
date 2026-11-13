@@ -517,6 +517,22 @@ def list_manual_active_items(db_path: Optional[str] = None) -> list[dict[str, An
         return [_row_to_item(r) for r in rows]
 
 
+def list_watched_and_manual_active_items(db_path: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return all active non-dismissed watched or manually tracked items."""
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT m.*, s.name AS search_name
+            FROM matched_items m
+            LEFT JOIN saved_searches s ON s.id = m.search_id
+            WHERE m.is_dismissed = 0
+              AND (m.is_watched = 1 OR m.search_id IS NULL)
+            ORDER BY CASE WHEN m.closing_at IS NULL THEN 1 ELSE 0 END, m.closing_at ASC, m.id DESC
+            """
+        ).fetchall()
+        return [_row_to_item(r) for r in rows]
+
+
 def set_item_flag(
     item_id: int, column: str, value: bool, db_path: Optional[str] = None
 ) -> Optional[dict[str, Any]]:
