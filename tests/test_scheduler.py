@@ -187,3 +187,121 @@ def test_run_due_searches_10s_delay_and_refreshes_watched_items(monkeypatch, tmp
 
     assert scraped_searches == []
     assert set(scraped_lots) == {"5001:10", "5002:20"}
+
+
+def test_scheduled_alert_batch_window_combines_items(monkeypatch, tmp_path):
+    from unittest.mock import MagicMock
+
+    db_file = str(tmp_path / "batch_window_test.db")
+    monkeypatch.setattr(config, "DATABASE_PATH", db_file)
+    database.init_db(db_file)
+    database.update_site_settings({"alert_batch_minutes": 15, "default_closing_soon_hours": 4.0}, db_path=db_file)
+
+    smtp_instance = MagicMock()
+    smtp_cm = MagicMock()
+    smtp_cm.__enter__.return_value = smtp_instance
+    monkeypatch.setattr("smtplib.SMTP", MagicMock(return_value=smtp_cm))
+
+    database.create_channel(
+        {
+            "name": "Email",
+            "channel_type": "email",
+            "config": {
+                "host": "smtp.example.com",
+                "port": 587,
+                "username": "user@example.com",
+                "password": "secret",
+                "from_email": "alerts@example.com",
+                "to_email": "me@example.com",
+            },
+            "enabled": True,
+        },
+        db_path=db_file,
+    )
+
+    item_a, _ = database.upsert_matched_item(
+        {
+            "lot_key": "7001:1",
+            "auction_id": "7001",
+            "lot_number": "1",
+            "title": "Watched Lathe A",
+            "url": "https://www.equip-bid.com/auction/7001/item/1",
+            "current_bid": 50.0,
+            "closing_at": "2026-11-13T16:40:00Z",
+        },
+        search_id=None,
+        is_watched=True,
+        db_path=db_file,
+    )
+    item_b, _ = database.upsert_matched_item(
+        {
+            "lot_key": "7002:2",
+            "auction_id": "7002",
+            "lot_number": "2",
+            "title": "Watched Mill B",
+            "url": "https://www.equip-bid.com/auction/7002/item/2",
+            "current_bid": 75.0,
+            "closing_at": "2026-11-13T16:50:00Z",
+        },
+        search_id=None,
+        is_watched=True,
+        db_path=db_file,
+    )
+
+    # Queue Item A at 13:00:00Z -> inside 15m batch window, no email sent yet
+    database.enqueue_pending_alert(
+        item_id=item_a["id"],
+        alert_type="closing_soon",
+        title="[Closing Soon (3h 40m)] Watched Lathe A — $50.00",
+        created_at="2026-11-13T13:00:00Z",
+        db_path=db_file,
+    )
+    assert asyncio.run(scheduler.flush_pending_alerts(db_path=db_file, now_utc=datetime(2026, 11, 13, 13, 0, 0, tzinfo=timezone.utc))) is None
+    assert smtp_instance.sendmail.call_count == 0
+
+    # Queue Item B at 13:10:00Z -> still inside 15m window since oldest (13:00:00Z)
+    database.enqueue_pending_alert(
+        item_id=item_b["id"],
+        alert_type="closing_soon",
+        title="[Closing Soon (3h 40m)] Watched Mill B — $75.00",
+        created_at="2026-11-13T13:10:00Z",
+        db_path=db_file,
+    )
+    assert asyncio.run(scheduler.flush_pending_alerts(db_path=db_file, now_utc=datetime(2026, 11, 13, 13, 10, 0, tzinfo=timezone.utc))) is None
+    assert smtp_instance.sendmail.call_count == 0
+
+    # At 13:15:00Z (15m elapsed) -> 1 combined email delivered for both lots
+    log = asyncio.run(scheduler.flush_pending_alerts(db_path=db_file, now_utc=datetime(2026, 11, 13, 13, 15, 0, tzinfo=timezone.utc)))
+    assert log is not None
+    assert smtp_instance.sendmail.call_count == 1
+    raw_msg = smtp_instance.sendmail.call_args[0][2]
+    assert "Watched Lathe A" in raw_msg
+    assert "Watched Mill B" in raw_msg
+    assert "2 Closing Soon Alerts" in raw_msg
+    assert database.list_pending_alerts(db_path=db_file) == []
+
+    # Urgent lot closing in 20 minutes flushes immediately without waiting 15m
+    urgent_item, _ = database.upsert_matched_item(
+        {
+            "lot_key": "7003:3",
+            "auction_id": "7003",
+            "lot_number": "3",
+            "title": "Urgent Band Saw",
+            "url": "https://www.equip-bid.com/auction/7003/item/3",
+            "current_bid": 90.0,
+            "closing_at": "2026-11-13T13:35:00Z",
+        },
+        search_id=None,
+        is_watched=True,
+        db_path=db_file,
+    )
+    database.enqueue_pending_alert(
+        item_id=urgent_item["id"],
+        alert_type="closing_soon",
+        title="[Closing Soon (20m)] Urgent Band Saw — $90.00",
+        created_at="2026-11-13T13:15:00Z",
+        db_path=db_file,
+    )
+    urgent_log = asyncio.run(scheduler.flush_pending_alerts(db_path=db_file, now_utc=datetime(2026, 11, 13, 13, 15, 0, tzinfo=timezone.utc)))
+    assert urgent_log is not None
+    assert smtp_instance.sendmail.call_count == 2

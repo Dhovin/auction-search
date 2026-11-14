@@ -116,6 +116,7 @@ class SiteSettingsUpdate(BaseModel):
     default_check_interval_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     default_closing_soon_hours: Optional[float] = Field(default=None, ge=0, le=168)
     include_shippable_out_of_range: Optional[bool] = None
+    alert_batch_minutes: Optional[int] = Field(default=None, ge=0, le=120)
 
     @field_validator("default_zip_code")
     @classmethod

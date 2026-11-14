@@ -125,6 +125,17 @@ def init_db(db_path: Optional[str] = None) -> None:
                 key TEXT PRIMARY KEY,
                 value_json TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS pending_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id INTEGER NOT NULL REFERENCES matched_items(id) ON DELETE CASCADE,
+                search_id INTEGER NULL REFERENCES saved_searches(id) ON DELETE SET NULL,
+                alert_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pending_alerts_created ON pending_alerts(created_at);
             """
         )
         cols = {
@@ -144,6 +155,7 @@ DEFAULT_SITE_SETTINGS: dict[str, Any] = {
     "default_check_interval_minutes": 30,
     "default_closing_soon_hours": 4.0,
     "include_shippable_out_of_range": True,
+    "alert_batch_minutes": 15,
 }
 
 
@@ -787,3 +799,92 @@ def update_site_settings(
                     (key, json.dumps(value)),
                 )
     return get_site_settings(db_path=db_path)
+
+
+def enqueue_pending_alert(
+    *,
+    item_id: int,
+    alert_type: str,
+    title: str,
+    search_id: Optional[int] = None,
+    created_at: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> int:
+    """Queue an alert for digest batching without duplicating (item_id, alert_type)."""
+    ts = created_at or utc_now_iso()
+    with get_connection(db_path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM pending_alerts WHERE item_id = ? AND alert_type = ?",
+            (item_id, alert_type),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+        cur = conn.execute(
+            """
+            INSERT INTO pending_alerts (item_id, search_id, alert_type, title, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (item_id, search_id, alert_type, title, ts),
+        )
+        return int(cur.lastrowid)
+
+
+def list_pending_alerts(db_path: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return pending alerts joined with the latest matched_items and saved_searches rows."""
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                p.id AS pending_id,
+                p.alert_type AS pending_alert_type,
+                p.title AS pending_title,
+                p.created_at AS pending_created_at,
+                p.search_id AS pending_search_id,
+                m.*,
+                s.name AS search_name
+            FROM pending_alerts p
+            JOIN matched_items m ON m.id = p.item_id
+            LEFT JOIN saved_searches s ON s.id = COALESCE(p.search_id, m.search_id)
+            ORDER BY p.created_at ASC, p.id ASC
+            """
+        ).fetchall()
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            pending_id = d.pop("pending_id")
+            pending_alert_type = d.pop("pending_alert_type")
+            pending_title = d.pop("pending_title")
+            pending_created_at = d.pop("pending_created_at")
+            pending_search_id = d.pop("pending_search_id")
+            d["is_read"] = bool(d["is_read"])
+            d["is_watched"] = bool(d["is_watched"])
+            d["is_dismissed"] = bool(d["is_dismissed"])
+            d["new_alert_sent"] = bool(d["new_alert_sent"])
+            d["closing_soon_alert_sent"] = bool(d["closing_soon_alert_sent"])
+            results.append(
+                {
+                    "pending_id": pending_id,
+                    "alert_type": pending_alert_type,
+                    "title": pending_title,
+                    "created_at": pending_created_at,
+                    "search_id": pending_search_id,
+                    "search": (
+                        {"id": pending_search_id, "name": d.get("search_name") or ""}
+                        if pending_search_id is not None
+                        else None
+                    ),
+                    "item": d,
+                }
+            )
+        return results
+
+
+def delete_pending_alerts(pending_ids: list[int], db_path: Optional[str] = None) -> None:
+    if not pending_ids:
+        return
+    placeholders = ", ".join("?" for _ in pending_ids)
+    with get_connection(db_path) as conn:
+        conn.execute(
+            f"DELETE FROM pending_alerts WHERE id IN ({placeholders})",
+            tuple(pending_ids),
+        )

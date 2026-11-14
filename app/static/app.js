@@ -15,6 +15,7 @@ const state = {
     default_check_interval_minutes: 30,
     default_closing_soon_hours: 4,
     include_shippable_out_of_range: true,
+    alert_batch_minutes: 15,
   },
 };
 
@@ -419,12 +420,14 @@ function renderSiteSettings() {
   const intEl = document.getElementById("global-interval");
   const closeEl = document.getElementById("global-closing-hours");
   const shipEl = document.getElementById("global-include-shippable");
+  const batchEl = document.getElementById("global-alert-batch-minutes");
   if (zipEl) zipEl.value = s.default_zip_code || "";
   if (distEl) distEl.value = String(s.default_distance_radius ?? -1);
   if (excEl) excEl.value = s.global_exclude_words || "";
   if (intEl) intEl.value = s.default_check_interval_minutes ?? 30;
   if (closeEl) closeEl.value = s.default_closing_soon_hours ?? 4;
   if (shipEl) shipEl.checked = s.include_shippable_out_of_range !== false;
+  if (batchEl) batchEl.value = s.alert_batch_minutes ?? 15;
   const badgeEl = document.getElementById("sidebar-defaults-badge");
   if (badgeEl) {
     const zip = (s.default_zip_code || "").trim();
@@ -455,6 +458,8 @@ async function loadSettings() {
 
 async function saveSiteSettings() {
   const closingRaw = document.getElementById("global-closing-hours").value.trim();
+  const batchEl = document.getElementById("global-alert-batch-minutes");
+  const batchRaw = batchEl ? batchEl.value.trim() : "";
   const payload = {
     default_zip_code: document.getElementById("global-zip").value.trim(),
     default_distance_radius: Number(document.getElementById("global-distance").value),
@@ -462,6 +467,7 @@ async function saveSiteSettings() {
     default_check_interval_minutes: Number(document.getElementById("global-interval").value || 30),
     default_closing_soon_hours: closingRaw === "" ? 0 : Number(closingRaw),
     include_shippable_out_of_range: document.getElementById("global-include-shippable").checked,
+    alert_batch_minutes: batchRaw === "" ? 15 : Number(batchRaw),
   };
   state.settings = await api("/api/settings", {
     method: "PUT",

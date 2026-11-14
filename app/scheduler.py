@@ -32,9 +32,13 @@ def _format_duration_short(hours_float: float) -> str:
 
 
 async def execute_saved_search(
-    search_id: int, db_path: Optional[str] = None
+    search_id: int,
+    db_path: Optional[str] = None,
+    *,
+    queue_alerts: bool = False,
+    now_utc: Optional[datetime] = None,
 ) -> dict[str, Any]:
-    """Run a single saved search against Equip-Bid, upsert matches, and send alerts."""
+    """Run a single saved search against Equip-Bid, upsert matches, and send/queue alerts."""
     search = database.get_search(search_id, db_path=db_path)
     if not search:
         raise ValueError(f"Saved search {search_id} not found")
@@ -74,9 +78,12 @@ async def execute_saved_search(
     )
 
     matched = [item for item in raw_items if scraper.filter_lot_item(item, effective_search)]
-    now_utc = datetime.now(timezone.utc)
-    new_alerts = 0
-    closing_alerts = 0
+    now = now_utc or datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_entries: list[dict[str, Any]] = []
+    closing_entries: list[dict[str, Any]] = []
+    new_count = 0
+    closing_count = 0
 
     for lot in matched:
         stored_item, is_new = database.upsert_matched_item(
@@ -87,28 +94,56 @@ async def execute_saved_search(
         if search.get("alert_on_new") and (is_new or not stored_item.get("new_alert_sent")):
             bid = float(stored_item.get("current_bid") or 0.0)
             alert_title = f"[New Match: {search['name']}] {stored_item['title']} — ${bid:,.2f}"
-            await notifier.dispatch_alerts(
-                alert_type="new_item",
-                title=alert_title,
-                item=stored_item,
-                search=search,
-                db_path=db_path,
-            )
+            entry = {
+                "alert_type": "new_item",
+                "title": alert_title,
+                "item": stored_item,
+                "search": search,
+            }
+            if queue_alerts:
+                database.enqueue_pending_alert(
+                    item_id=stored_item["id"],
+                    search_id=search["id"],
+                    alert_type="new_item",
+                    title=alert_title,
+                    created_at=now_iso,
+                    db_path=db_path,
+                )
+            else:
+                new_entries.append(entry)
             database.mark_item_alert_flags(
                 stored_item["id"], new_alert_sent=True, db_path=db_path
             )
-            new_alerts += 1
+            new_count += 1
 
         # 2) Closing Soon Alert
-        if await _maybe_dispatch_closing_alert(
+        closing_entry = _collect_closing_alert(
             stored_item,
             closing_hours=search.get("closing_soon_hours"),
             max_bid=search.get("max_bid"),
-            now_utc=now_utc,
+            now_utc=now,
             search=search,
             db_path=db_path,
-        ):
-            closing_alerts += 1
+        )
+        if closing_entry is not None:
+            if queue_alerts:
+                database.enqueue_pending_alert(
+                    item_id=stored_item["id"],
+                    search_id=search["id"],
+                    alert_type="closing_soon",
+                    title=closing_entry["title"],
+                    created_at=now_iso,
+                    db_path=db_path,
+                )
+            else:
+                closing_entries.append(closing_entry)
+            closing_count += 1
+
+    if not queue_alerts:
+        if new_entries:
+            await notifier.dispatch_batch_alerts(new_entries, db_path=db_path)
+        if closing_entries:
+            await notifier.dispatch_batch_alerts(closing_entries, db_path=db_path)
 
     database.update_search_run_stats(search["id"], match_count=len(matched), db_path=db_path)
 
@@ -117,8 +152,8 @@ async def execute_saved_search(
         "search_name": search["name"],
         "total_scraped": len(raw_items),
         "matched": len(matched),
-        "new_alerts": new_alerts,
-        "closing_alerts": closing_alerts,
+        "new_alerts": new_count,
+        "closing_alerts": closing_count,
     }
 
 
@@ -184,7 +219,7 @@ def _is_tracked_item_due(item: dict[str, Any], now_utc: datetime) -> bool:
     return last_seen < slot_start
 
 
-async def _maybe_dispatch_closing_alert(
+def _collect_closing_alert(
     stored_item: dict[str, Any],
     *,
     closing_hours: Optional[float],
@@ -192,8 +227,8 @@ async def _maybe_dispatch_closing_alert(
     now_utc: datetime,
     search: Optional[dict[str, Any]] = None,
     db_path: Optional[str] = None,
-) -> bool:
-    """Send a closing-soon alert if within window and not yet notified."""
+) -> Optional[dict[str, Any]]:
+    """Mark and return a closing-soon alert entry if within window and not yet notified."""
     closing_dt = _parse_iso_utc(stored_item.get("closing_at"))
     if (
         closing_hours is None
@@ -201,7 +236,7 @@ async def _maybe_dispatch_closing_alert(
         or closing_dt is None
         or stored_item.get("closing_soon_alert_sent")
     ):
-        return False
+        return None
 
     hours_left = (closing_dt - now_utc).total_seconds() / 3600.0
     within_budget = max_bid is None or float(stored_item.get("current_bid") or 0.0) <= float(max_bid)
@@ -209,21 +244,19 @@ async def _maybe_dispatch_closing_alert(
         bid = float(stored_item.get("current_bid") or 0.0)
         time_left_str = _format_duration_short(hours_left)
         alert_title = f"[Closing Soon ({time_left_str})] {stored_item['title']} — ${bid:,.2f}"
-        await notifier.dispatch_alerts(
-            alert_type="closing_soon",
-            title=alert_title,
-            item=stored_item,
-            search=search,
-            db_path=db_path,
-        )
         database.mark_item_alert_flags(
             stored_item["id"],
             closing_soon_alert_sent=True,
             is_read=False,
             db_path=db_path,
         )
-        return True
-    return False
+        return {
+            "alert_type": "closing_soon",
+            "title": alert_title,
+            "item": stored_item,
+            "search": search,
+        }
+    return None
 
 
 async def refresh_tracked_items(
@@ -231,6 +264,7 @@ async def refresh_tracked_items(
     *,
     force: bool = True,
     now_utc: Optional[datetime] = None,
+    queue_alerts: bool = False,
 ) -> dict[str, int]:
     """Re-scrape watched and manually added items on their tiered schedule."""
     items = database.list_watched_and_manual_active_items(db_path=db_path)
@@ -240,9 +274,10 @@ async def refresh_tracked_items(
     settings = database.get_site_settings(db_path=db_path)
     default_closing_hours = settings.get("default_closing_soon_hours")
     now = now_utc or datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     search_cache: dict[int, Optional[dict[str, Any]]] = {}
     refreshed = 0
-    closing_alerts = 0
+    closing_entries: list[dict[str, Any]] = []
 
     for item in items:
         closing_dt = _parse_iso_utc(item.get("closing_at"))
@@ -273,23 +308,82 @@ async def refresh_tracked_items(
                 lot, search_id=parent_search_id, db_path=db_path
             )
             refreshed += 1
-            if await _maybe_dispatch_closing_alert(
+            closing_entry = _collect_closing_alert(
                 stored_item,
                 closing_hours=closing_hours,
                 max_bid=max_bid,
                 now_utc=now,
                 search=parent_search,
                 db_path=db_path,
-            ):
-                closing_alerts += 1
+            )
+            if closing_entry is not None:
+                if queue_alerts:
+                    database.enqueue_pending_alert(
+                        item_id=stored_item["id"],
+                        search_id=parent_search_id,
+                        alert_type="closing_soon",
+                        title=closing_entry["title"],
+                        created_at=now_iso,
+                        db_path=db_path,
+                    )
+                closing_entries.append(closing_entry)
         except Exception as exc:
             logger.warning("Failed refreshing tracked item %s: %s", item.get("lot_key"), exc)
         await asyncio.sleep(0.2)
 
-    return {"refreshed": refreshed, "closing_alerts": closing_alerts}
+    if not queue_alerts and closing_entries:
+        await notifier.dispatch_batch_alerts(closing_entries, db_path=db_path)
+
+    return {"refreshed": refreshed, "closing_alerts": len(closing_entries)}
 
 
 refresh_manual_items = refresh_tracked_items
+
+
+async def flush_pending_alerts(
+    db_path: Optional[str] = None,
+    *,
+    force: bool = False,
+    now_utc: Optional[datetime] = None,
+) -> Optional[dict[str, Any]]:
+    """Flush pending alerts into one combined notification once the batch window elapses or an item is urgent."""
+    pending = database.list_pending_alerts(db_path=db_path)
+    if not pending:
+        return None
+
+    dismissed_ids = [p["pending_id"] for p in pending if p["item"].get("is_dismissed")]
+    active = [p for p in pending if not p["item"].get("is_dismissed")]
+    if not active:
+        database.delete_pending_alerts(dismissed_ids, db_path=db_path)
+        return None
+
+    now = now_utc or datetime.now(timezone.utc)
+    settings = database.get_site_settings(db_path=db_path)
+    raw_batch = settings.get("alert_batch_minutes")
+    batch_minutes = max(0, int(raw_batch if raw_batch is not None else 15))
+
+    should_flush = force or batch_minutes == 0
+    if not should_flush:
+        oldest_dt = min(_parse_iso_utc(p.get("created_at")) or now for p in active)
+        if (now - oldest_dt).total_seconds() >= batch_minutes * 60:
+            should_flush = True
+
+    if not should_flush:
+        # Never hold alerts past urgency if any queued item is closing within 30 minutes
+        for p in active:
+            closing_dt = _parse_iso_utc(p["item"].get("closing_at"))
+            if closing_dt is not None and (closing_dt - now).total_seconds() <= 1800:
+                should_flush = True
+                break
+
+    if not should_flush:
+        if dismissed_ids:
+            database.delete_pending_alerts(dismissed_ids, db_path=db_path)
+        return None
+
+    log = await notifier.dispatch_batch_alerts(active, db_path=db_path)
+    database.delete_pending_alerts([p["pending_id"] for p in pending], db_path=db_path)
+    return log
 
 
 async def run_due_searches(
@@ -297,7 +391,7 @@ async def run_due_searches(
     *,
     now_utc: Optional[datetime] = None,
 ) -> list[dict[str, Any]]:
-    """Run all enabled searches on schedule and refresh watched/manual items."""
+    """Run all enabled searches on schedule, refresh watched/manual items, and flush alert batches."""
     now = now_utc or datetime.now(timezone.utc)
     searches = database.list_searches(enabled_only=True, db_path=db_path)
     due_searches = [s for s in searches if _is_search_due(s, now)]
@@ -306,21 +400,28 @@ async def run_due_searches(
         if idx > 0 and SEARCH_DELAY_SECONDS > 0:
             await asyncio.sleep(SEARCH_DELAY_SECONDS)
         try:
-            res = await execute_saved_search(search["id"], db_path=db_path)
+            res = await execute_saved_search(
+                search["id"], db_path=db_path, queue_alerts=True, now_utc=now
+            )
             results.append(res)
         except Exception as exc:
             logger.exception("Failed running search %s (%s): %s", search["id"], search["name"], exc)
-    await refresh_tracked_items(db_path=db_path, force=False, now_utc=now)
+    await refresh_tracked_items(
+        db_path=db_path, force=False, now_utc=now, queue_alerts=True
+    )
+    await flush_pending_alerts(db_path=db_path, force=False, now_utc=now)
     return results
 
 
 async def run_all_enabled_searches(db_path: Optional[str] = None) -> list[dict[str, Any]]:
-    """Force-run all enabled saved searches immediately."""
+    """Force-run all enabled saved searches immediately and send one combined alert digest."""
     searches = database.list_searches(enabled_only=True, db_path=db_path)
     results: list[dict[str, Any]] = []
     for search in searches:
         try:
-            res = await execute_saved_search(search["id"], db_path=db_path)
+            res = await execute_saved_search(
+                search["id"], db_path=db_path, queue_alerts=True
+            )
             results.append(res)
         except Exception as exc:
             logger.exception("Failed running search %s: %s", search["id"], exc)
@@ -332,7 +433,8 @@ async def run_all_enabled_searches(db_path: Optional[str] = None) -> list[dict[s
                 }
             )
         await asyncio.sleep(0.5)
-    await refresh_tracked_items(db_path=db_path, force=True)
+    await refresh_tracked_items(db_path=db_path, force=True, queue_alerts=True)
+    await flush_pending_alerts(db_path=db_path, force=True)
     return results
 
 
